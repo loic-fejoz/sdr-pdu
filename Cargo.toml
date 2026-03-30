@@ -1,0 +1,27 @@
+[package]
+name = "pluto-tx-2fsk"
+version = "0.1.0"
+edition = "2024"
+authors = ["F4JXQ <loic@fejoz.net>"]
+description = "PlutoSDR 2FSK Gateway with KISS and CAT (rigctld) support."
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+futures = "0.3"
+num-complex = "0.4"
+industrial-io = "0.3"
+clap = { version = "4", features = ["derive"] }
+# libiio and libad9361 bindings will be needed later, 
+# but for unit tests of KISS/CAT/NCO we can start without them or with stubs.
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = "fat"
+opt-level = 3
+panic = "abort"
