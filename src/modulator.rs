@@ -2,18 +2,21 @@ use crate::nco::TableNco;
 
 pub struct FskModulator {
     nco: TableNco,
-    sample_rate: u32,
-    deviation: u32, // in Hz
     samples_per_symbol: f64,
+    phase_inc_pos: u32,
+    phase_inc_neg: u32,
 }
 
 impl FskModulator {
     pub fn new(sample_rate: u32, baud_rate: u32, deviation: u32) -> Self {
+        let phase_inc_pos = (((deviation as u64) << 32) / (sample_rate as u64)) as u32;
+        let phase_inc_neg = phase_inc_pos.wrapping_neg();
+
         Self {
             nco: TableNco::new(10),
-            sample_rate,
-            deviation,
             samples_per_symbol: (sample_rate as f64) / (baud_rate as f64),
+            phase_inc_pos,
+            phase_inc_neg,
         }
     }
 
@@ -22,26 +25,18 @@ impl FskModulator {
         let total_samples_expected = (total_bits as f64 * self.samples_per_symbol).ceil() as usize;
         let mut buffer = Vec::with_capacity(total_samples_expected * 2);
 
-        // Local reusable buffer for samples within a symbol to allow vectorized fill_buffer
-        let mut symbol_buffer = vec![0i16; (self.samples_per_symbol.ceil() as usize + 2) * 2];
+        // Local reusable buffer for samples within a symbol
+        let mut symbol_buffer = vec![0i16; (self.samples_per_symbol.ceil() as usize + 8) * 2];
 
         let mut bit_counter = 1.0;
         for &byte in data {
             for bit_idx in 0..8 {
                 let bit = (byte >> (7 - bit_idx)) & 1;
-
-                let freq = if bit == 1 {
-                    self.deviation as i32
+                let phase_inc = if bit == 1 {
+                    self.phase_inc_pos
                 } else {
-                    -(self.deviation as i32)
+                    self.phase_inc_neg
                 };
-
-                let phase_inc = if freq >= 0 {
-                    ((freq as u64) << 32) / (self.sample_rate as u64)
-                } else {
-                    (((freq.unsigned_abs() as u64) << 32) / (self.sample_rate as u64))
-                        .wrapping_neg()
-                } as u32;
 
                 // Absolute sample position for this bit end
                 let end_sample_idx = (bit_counter * self.samples_per_symbol).floor() as usize;
