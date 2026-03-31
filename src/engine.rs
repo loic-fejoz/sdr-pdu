@@ -38,9 +38,14 @@ impl<D: SdrDevice> TransmissionEngine<D> {
                 continue;
             }
 
-            let iq_buffer = self.modulator.modulate(&frame);
+            let frame_iq = self.modulator.modulate(&frame);
+            let preamble_iq = self.modulator.get_preamble_syncword_iq();
 
-            if let Err(e) = self.device.push_samples(&iq_buffer) {
+            let mut full_iq = Vec::with_capacity(preamble_iq.len() + frame_iq.len());
+            full_iq.extend_from_slice(preamble_iq);
+            full_iq.extend_from_slice(&frame_iq);
+
+            if let Err(e) = self.device.push_samples(&full_iq) {
                 error!("Failed to push samples: {}", e);
             }
         }
@@ -58,7 +63,8 @@ mod tests {
         let (tx, rx) = mpsc::channel(10);
         let freq = Arc::new(AtomicU64::new(144000000));
         let device = MockDevice::new(1000000, 200000).unwrap();
-        let modulat = FskModulator::new(1000000, 9600, 2400);
+        let mut modulat = FskModulator::new(1000000, 9600, 2400);
+        modulat.set_preamble_and_syncword("0x55", 8, "0x7E").unwrap();
 
         let engine = TransmissionEngine::new(device, modulat, freq.clone(), rx);
 
@@ -66,6 +72,5 @@ mod tests {
         drop(tx); // Close channel to terminate run loop
 
         engine.run().await;
-        // Check if device received something - we need to get back the device or use Arc/Mutex for mock
     }
 }

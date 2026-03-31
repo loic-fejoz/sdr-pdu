@@ -5,6 +5,7 @@ pub struct FskModulator {
     samples_per_symbol: f64,
     phase_inc_pos: u32,
     phase_inc_neg: u32,
+    preamble_syncword_iq: Vec<i16>,
 }
 
 impl FskModulator {
@@ -17,7 +18,63 @@ impl FskModulator {
             samples_per_symbol: (sample_rate as f64) / (baud_rate as f64),
             phase_inc_pos,
             phase_inc_neg,
+            preamble_syncword_iq: Vec::new(),
         }
+    }
+
+    pub fn set_preamble_and_syncword(
+        &mut self,
+        preamble_str: &str,
+        preamble_repetition: u32,
+        syncword_str: &str,
+    ) -> anyhow::Result<()> {
+        let preamble_byte = self.parse_hex_byte(preamble_str)?;
+        let syncword = self.parse_hex_bytes(syncword_str)?;
+
+        let mut data = Vec::with_capacity(preamble_repetition as usize + syncword.len());
+        for _ in 0..preamble_repetition {
+            data.push(preamble_byte);
+        }
+        data.extend_from_slice(&syncword);
+
+        self.preamble_syncword_iq = self.modulate(&data);
+        Ok(())
+    }
+
+    pub fn get_preamble_syncword_iq(&self) -> &[i16] {
+        &self.preamble_syncword_iq
+    }
+
+    fn parse_hex_byte(&self, s: &str) -> anyhow::Result<u8> {
+        let s = s.trim_start_matches("0x").trim_start_matches("0X");
+        if s.len() > 2 {
+            anyhow::bail!("Invalid hex byte: {}", s);
+        }
+        u8::from_str_radix(s, 16).map_err(|e| anyhow::anyhow!("Hex parse error: {}", e))
+    }
+
+    fn parse_hex_bytes(&self, s: &str) -> anyhow::Result<Vec<u8>> {
+        let s = s.trim_start_matches("0x").trim_start_matches("0X");
+        if s.is_empty() {
+            return Ok(Vec::new());
+        }
+        if s.len() % 2 != 0 {
+            // Prepend a zero if length is odd, e.g., "7E" -> "7E", but "7" -> "07"
+            let padded = format!("0{}", s);
+            self.parse_hex_bytes_even(&padded)
+        } else {
+            self.parse_hex_bytes_even(s)
+        }
+    }
+
+    fn parse_hex_bytes_even(&self, s: &str) -> anyhow::Result<Vec<u8>> {
+        let mut res = Vec::with_capacity(s.len() / 2);
+        for i in (0..s.len()).step_by(2) {
+            let byte = u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|e| anyhow::anyhow!("Hex parse error at {}: {}", &s[i..i + 2], e))?;
+            res.push(byte);
+        }
+        Ok(res)
     }
 
     pub fn modulate(&mut self, data: &[u8]) -> Vec<i16> {
@@ -71,5 +128,15 @@ mod tests {
         // Ceil should give 834 or something similar depending on rounding
         assert!(samples.len() / 2 >= 833);
         assert!(samples.len() / 2 <= 835);
+    }
+
+    #[test]
+    fn test_hex_parsing() {
+        let modulat = FskModulator::new(1000000, 9600, 2400);
+        assert_eq!(modulat.parse_hex_byte("0x55").unwrap(), 0x55);
+        assert_eq!(modulat.parse_hex_byte("55").unwrap(), 0x55);
+        assert_eq!(modulat.parse_hex_bytes("0x1ACFFC1D").unwrap(), vec![0x1A, 0xCF, 0xFC, 0x1D]);
+        assert_eq!(modulat.parse_hex_bytes("7E").unwrap(), vec![0x7E]);
+        assert_eq!(modulat.parse_hex_bytes("7").unwrap(), vec![0x07]);
     }
 }

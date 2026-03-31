@@ -45,13 +45,25 @@ struct Args {
     #[arg(short, long, default_value_t = 2400)]
     deviation: u32,
 
-    /// SDR sample rate in Sps
-    #[arg(short, long, default_value_t = 1000000)]
+    /// SDR sample rate in Sps (Min ~2.1 MSPS for Pluto)
+    #[arg(short, long, default_value_t = 2100000)]
     sample_rate: u32,
 
-    /// SDR analog bandwidth in Hz
-    #[arg(short, long, default_value_t = 200000)]
+    /// SDR analog bandwidth in Hz (Min 200 kHz)
+    #[arg(short, long, default_value_t = 1000000)]
     bandwidth: u32,
+
+    /// Preamble byte (e.g., 0x55)
+    #[arg(long, default_value = "0x55")]
+    preamble: String,
+
+    /// Number of times to repeat the preamble byte
+    #[arg(long, default_value_t = 8)]
+    preamble_repetition: u32,
+
+    /// Syncword (e.g., 0x1ACFFC1D)
+    #[arg(long, default_value = "0x7E")]
+    syncword: String,
 }
 
 #[tokio::main]
@@ -66,7 +78,9 @@ async fn main() -> anyhow::Result<()> {
     // In real deployment on Pluto it should work.
     let device = PlutoDevice::new(args.sample_rate, args.bandwidth)
         .map_err(|e| anyhow::anyhow!("Pluto init failed: {}", e))?;
-    let modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
+    let mut modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
+
+    modulator.set_preamble_and_syncword(&args.preamble, args.preamble_repetition, &args.syncword)?;
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
     let kiss_server = KissServer::new(tx);

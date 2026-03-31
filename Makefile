@@ -18,7 +18,7 @@ PLUTO_RUSTFLAGS = -C target-cpu=cortex-a9 -C target-feature=+vfp3,+neon \
                   -C link-arg=-Wl,-rpath-link,$(SYSROOT)/usr/lib \
                   -C link-arg=-Wl,-rpath-link,$(SYSROOT)/lib
 
-.PHONY: all clean release-pluto check test
+.PHONY: all clean release-pluto check test push
 
 all: release-pluto
 
@@ -41,3 +41,6 @@ test:
 
 clean:
 	$(CARGO) clean
+
+push: release-pluto
+	scp -O ./target/arm-unknown-linux-gnueabihf/release/pluto-tx-2fsk root@192.168.2.1:/root/
