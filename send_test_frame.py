@@ -28,7 +28,7 @@ def main():
     
     # Create a long pattern (approx 200 bytes) for easy waterfall visibility
     # Alternating 0x55 (01010101) and 0xAA (10101010) creates distinct FSK tones
-    test_pattern = bytes([0x55, 0xAA] * 1000)
+    test_pattern = bytes([0x55, 0xAA] * 120)
     kiss_packet = create_kiss_frame(test_pattern)
     
     print(f"Connecting to KISS server at {target_ip}:{target_port}...")

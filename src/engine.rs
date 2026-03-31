@@ -31,15 +31,19 @@ impl<D: SdrDevice> TransmissionEngine<D> {
         info!("Transmission engine started");
         while let Some(frame) = self.receiver.recv().await {
             let freq = self.freq_shared.load(Ordering::SeqCst);
-            info!("Transmitting frame (len={}) at {} Hz", frame.len(), freq);
+            
+            // Modulate first
+            let frame_iq = self.modulator.modulate(&frame);
+            let preamble_iq = self.modulator.get_preamble_syncword_iq();
+            let total_samples = (preamble_iq.len() + frame_iq.len()) / 2;
+
+            info!("Transmitting frame (len={}) at {} Hz. Samples: {}", 
+                frame.len(), freq, total_samples);
 
             if let Err(e) = self.device.set_frequency(freq) {
                 error!("Failed to set frequency: {}", e);
                 continue;
             }
-
-            let frame_iq = self.modulator.modulate(&frame);
-            let preamble_iq = self.modulator.get_preamble_syncword_iq();
 
             let mut full_iq = Vec::with_capacity(preamble_iq.len() + frame_iq.len());
             full_iq.extend_from_slice(preamble_iq);
@@ -62,7 +66,7 @@ mod tests {
     async fn test_engine_run() {
         let (tx, rx) = mpsc::channel(10);
         let freq = Arc::new(AtomicU64::new(144000000));
-        let device = MockDevice::new(1000000, 200000).unwrap();
+        let device = MockDevice::new(1000000, 200000, 10.0, 0).unwrap();
         let mut modulat = FskModulator::new(1000000, 9600, 2400);
         modulat.set_preamble_and_syncword("0x55", 8, "0x7E").unwrap();
 

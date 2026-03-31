@@ -44,3 +44,6 @@ clean:
 
 push: release-pluto
 	scp -O ./target/arm-unknown-linux-gnueabihf/release/pluto-tx-2fsk root@192.168.2.1:/root/
+
+push-spino: push
+	scp -O spino.sh root@192.168.2.1:/root/
