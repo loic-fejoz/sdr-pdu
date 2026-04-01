@@ -24,3 +24,8 @@ The `Makefile` will automatically:
 1. Pass `--sysroot` to the linker via `RUSTFLAGS`.
 2. Configure `pkg-config` to look into the sysroot (`PKG_CONFIG_PATH`).
 3. Set `CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER` to `arm-linux-gnueabihf-gcc`.
+
+### Refactoring Safety
+- **Buffer Persistence:** The `std::thread::sleep` in `push_samples` is mandatory to prevent `libiio` from destroying the buffer before the hardware finishes transmission. DO NOT remove it without implementing an async completion callback.
+- **DDS Disabling:** Initialization MUST disable internal DDS tones to prevent parasitic carriers.
+- **Error Context:** Every IIO attribute write MUST use `map_err` to provide diagnostic context including the value being written and the attribute name.

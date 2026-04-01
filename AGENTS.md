@@ -10,6 +10,10 @@ High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing KISS/CAT netwo
 - **DSP:** Fixed-point NCO with ARM NEON optimization
 - **CLI:** Clap v4 (Argument Parsing)
 
+## Development Principles
+- **Context Preservation:** NEVER remove technical comments explaining hardware workarounds, SIMD logic, or critical timing (e.g., buffer persistence).
+- **Error Integrity:** Always use `anyhow::Context` or `map_err` to provide granular details (sample counts, attribute names, requested vs. actual values). Diagnostic quality must never be sacrificed for brevity.
+
 ## Critical Commands
 - **Install:** `cargo fetch`
 - **Test:** `make test` (MANDATORY before task completion)

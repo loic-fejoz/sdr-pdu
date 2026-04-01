@@ -16,7 +16,7 @@ impl TableNco {
             let angle = 2.0 * PI * (i as f64) / (size as f64);
             let s = (angle.sin() * 32767.0) as i16;
             let c = (angle.cos() * 32767.0) as i16;
-            // Pack I and Q into a single u32. 
+            // Pack I and Q into a single u32.
             // In little-endian, (I as u16) will be at the lower address.
             let packed = (c as u16 as u32) | ((s as u16 as u32) << 16);
             lut.push(packed);

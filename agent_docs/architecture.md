@@ -13,3 +13,7 @@
 
 ## Abstractions
 - **SdrDevice Trait**: Decouples hardware IIO from transmission logic. Allows `MockDevice` for unit testing the engine without hardware.
+
+## Safety & Silence (RF Watchdog)
+- **Status:** Mandatory.
+- **Mechanism:** The `TransmissionEngine` forces the `SdrDevice` into a "disabled" state (max attenuation + zeroed DMA) during idle periods. This prevents parasitic carriers and ensures regulatory compliance during application crashes or network silence.

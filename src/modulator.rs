@@ -58,7 +58,7 @@ impl FskModulator {
         if s.is_empty() {
             return Ok(Vec::new());
         }
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             // Prepend a zero if length is odd, e.g., "7E" -> "7E", but "7" -> "07"
             let padded = format!("0{}", s);
             self.parse_hex_bytes_even(&padded)
@@ -135,7 +135,10 @@ mod tests {
         let modulat = FskModulator::new(1000000, 9600, 2400);
         assert_eq!(modulat.parse_hex_byte("0x55").unwrap(), 0x55);
         assert_eq!(modulat.parse_hex_byte("55").unwrap(), 0x55);
-        assert_eq!(modulat.parse_hex_bytes("0x1ACFFC1D").unwrap(), vec![0x1A, 0xCF, 0xFC, 0x1D]);
+        assert_eq!(
+            modulat.parse_hex_bytes("0x1ACFFC1D").unwrap(),
+            vec![0x1A, 0xCF, 0xFC, 0x1D]
+        );
         assert_eq!(modulat.parse_hex_bytes("7E").unwrap(), vec![0x7E]);
         assert_eq!(modulat.parse_hex_bytes("7").unwrap(), vec![0x07]);
     }

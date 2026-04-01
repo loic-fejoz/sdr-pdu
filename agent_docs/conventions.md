@@ -7,7 +7,12 @@
 ## Error Handling
 - **Application Level:** Use `anyhow::Result<()>` for top-level results (`src/main.rs`).
 - **Module Level:** Prefer specific `io::Error` for codecs or `anyhow::Error` for device control.
+- **Granularity:** Hardware operations MUST include context (e.g., `map_err(|e| anyhow!("Failed to set frequency to {}: {}", freq, e))`). Include requested vs. actual values whenever possible.
 - **Fail-Safe:** In the transmission loop (`src/engine.rs`), use `error!` logging to report failures without crashing the entire service.
+
+## Documentation & Comments
+- **Mandatory Comments:** Any code handling hardware workarounds (e.g., PlutoSDR DMA buffer persistence, DDS disabling) or optimized SIMD loops must be documented with technical rationale.
+- **Refactoring:** When refactoring, comments explaining "why" (not just "what") must be preserved or improved, never deleted.
 
 ## Async & Concurrency
 - **Runtime:** `tokio::main` multi-threaded runtime.

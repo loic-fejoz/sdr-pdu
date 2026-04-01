@@ -83,14 +83,23 @@ async fn main() -> anyhow::Result<()> {
     let freq = Arc::new(AtomicU64::new(args.frequency));
 
     // Initialize Pluto
-    let device = PlutoDevice::new(args.sample_rate, args.bandwidth, args.attenuation, args.offset)
-        .map_err(|e| anyhow::anyhow!("Pluto init failed: {}", e))?;
-    
+    let device = PlutoDevice::new(
+        args.sample_rate,
+        args.bandwidth,
+        args.attenuation,
+        args.offset,
+    )
+    .map_err(|e| anyhow::anyhow!("Pluto init failed: {}", e))?;
+
     // Read back actual sample rate if possible to ensure NCO is correct
     let actual_sample_rate = device.get_actual_sample_rate();
     let mut modulator = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
 
-    modulator.set_preamble_and_syncword(&args.preamble, args.preamble_repetition, &args.syncword)?;
+    modulator.set_preamble_and_syncword(
+        &args.preamble,
+        args.preamble_repetition,
+        &args.syncword,
+    )?;
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
     let kiss_server = KissServer::new(tx);
