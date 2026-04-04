@@ -1,12 +1,11 @@
 use anyhow::Context;
-use std::future::Future;
 use tracing::{error, info, warn};
 use waverave_hackrf::{ComplexI8, HackRf, Transmit};
 
 pub trait SdrDevice: Send {
     async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()>;
     async fn push_samples(&mut self, samples: &[i8]) -> anyhow::Result<()>;
-    fn get_actual_sample_rate(&self) -> u32;
+    fn _get_actual_sample_rate(&self) -> u32;
     async fn enable_tx(&mut self) -> anyhow::Result<()>;
     async fn disable_tx(&mut self) -> anyhow::Result<()>;
 }
@@ -19,9 +18,9 @@ enum HackRfState {
 
 pub struct HackRfDevice {
     state: HackRfState,
-    actual_sample_rate: u32,
-    tx_vga: u16,
-    amp_enable: bool,
+    _actual_sample_rate: u32,
+    _tx_vga: u16,
+    _amp_enable: bool,
     offset: i64,
 }
 
@@ -59,17 +58,17 @@ impl HackRfDevice {
 
         Ok(Self {
             state: HackRfState::Idle(hackrf),
-            actual_sample_rate: sample_rate,
-            tx_vga,
-            amp_enable,
+            _actual_sample_rate: sample_rate,
+            _tx_vga: tx_vga,
+            _amp_enable: amp_enable,
             offset,
         })
     }
 }
 
 impl SdrDevice for HackRfDevice {
-    fn get_actual_sample_rate(&self) -> u32 {
-        self.actual_sample_rate
+    fn _get_actual_sample_rate(&self) -> u32 {
+        self._actual_sample_rate
     }
 
     async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {

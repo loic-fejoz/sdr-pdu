@@ -14,3 +14,4 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 waverave-hackrf = "0.1.2"
+sdr-pdu-utils = { path = "../sdr-pdu-utils" }

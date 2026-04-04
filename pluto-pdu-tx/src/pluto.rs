@@ -68,17 +68,17 @@ impl PlutoDevice {
         // Set Sample Rate and Bandwidth ONLY on TX channel to avoid affecting RX
         // We check current value first to avoid unnecessary BBPLL retunes
         let current_sr = tx_phy_chan.attr_read_int("sampling_frequency").unwrap_or(0);
-        if (current_sr as f64 - sample_rate as f64).abs() > (sample_rate as f64 * 0.01) {
-            if let Err(e) = tx_phy_chan.attr_write_int("sampling_frequency", sample_rate as i64) {
-                tracing::warn!("Failed to set TX sampling_frequency: {}", e);
-            }
+        if (current_sr as f64 - sample_rate as f64).abs() > (sample_rate as f64 * 0.01)
+            && let Err(e) = tx_phy_chan.attr_write_int("sampling_frequency", sample_rate as i64)
+        {
+            tracing::warn!("Failed to set TX sampling_frequency: {}", e);
         }
 
         let current_bw = tx_phy_chan.attr_read_int("rf_bandwidth").unwrap_or(0);
-        if (current_bw as f64 - bandwidth as f64).abs() > (bandwidth as f64 * 0.01) {
-            if let Err(e) = tx_phy_chan.attr_write_int("rf_bandwidth", bandwidth as i64) {
-                tracing::warn!("Failed to set TX rf_bandwidth: {}", e);
-            }
+        if (current_bw as f64 - bandwidth as f64).abs() > (bandwidth as f64 * 0.01)
+            && let Err(e) = tx_phy_chan.attr_write_int("rf_bandwidth", bandwidth as i64)
+        {
+            tracing::warn!("Failed to set TX rf_bandwidth: {}", e);
         }
 
         // Configure Sample Rate on TX DAC if possible

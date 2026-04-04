@@ -14,21 +14,16 @@ impl Decoder for KissDecoder {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // Find the first FEND
         let start = src.iter().position(|&b| b == FEND);
 
         if let Some(start_idx) = start {
-            // Discard everything before first FEND
             src.advance(start_idx);
-
-            // Find the NEXT FEND (end of frame)
             let end = src.iter().skip(1).position(|&b| b == FEND);
 
             if let Some(end_idx_relative) = end {
                 let end_idx = end_idx_relative + 1;
                 let frame_raw = src.split_to(end_idx + 1);
 
-                // Process frame (skip FEND at start and end)
                 let mut decoded = Vec::with_capacity(frame_raw.len());
                 let mut i = 1;
                 while i < frame_raw.len() - 1 {
@@ -39,11 +34,11 @@ impl Decoder for KissDecoder {
                             match frame_raw[i] {
                                 TFEND => decoded.push(FEND),
                                 TFESC => decoded.push(FESC),
-                                _ => decoded.push(frame_raw[i]), // Should technically be an error or handled
+                                _ => decoded.push(frame_raw[i]),
                             }
                         }
                     } else if b == FEND {
-                        // Double FEND? Just skip?
+                        // Double FEND skip
                     } else {
                         decoded.push(b);
                     }
@@ -51,13 +46,12 @@ impl Decoder for KissDecoder {
                 }
 
                 if decoded.is_empty() {
-                    return self.decode(src); // Try next frame
+                    return self.decode(src);
                 }
 
                 return Ok(Some(decoded));
             }
         } else {
-            // No FEND found, if buffer is too large, we might want to clear it to avoid OOM
             if src.len() > 8192 {
                 src.clear();
             }
@@ -75,7 +69,6 @@ mod tests {
     #[test]
     fn test_kiss_decode_simple() {
         let mut decoder = KissDecoder;
-        // 0x00 is the command byte (Data)
         let mut buf = BytesMut::from(&[FEND, 0x00, 0x01, 0x02, 0x03, FEND][..]);
         let res = decoder.decode(&mut buf).unwrap();
         assert_eq!(res, Some(vec![0x00, 0x01, 0x02, 0x03]));
@@ -84,7 +77,6 @@ mod tests {
     #[test]
     fn test_kiss_decode_escaped() {
         let mut decoder = KissDecoder;
-        // 0x00 (Data), 0xF0 (Extra), Escaped FEND, Escaped FESC, 0x05
         let mut buf = BytesMut::from(&[FEND, 0x00, 0xF0, FESC, TFEND, FESC, TFESC, 0x05, FEND][..]);
         let res = decoder.decode(&mut buf).unwrap();
         assert_eq!(res, Some(vec![0x00, 0xF0, FEND, FESC, 0x05]));

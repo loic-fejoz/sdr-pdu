@@ -361,6 +361,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "futures",
+ "sdr-pdu-utils",
  "tokio",
  "tokio-util",
  "tracing",
@@ -576,6 +577,7 @@ dependencies = [
  "futures",
  "industrial-io",
  "num-complex",
+ "sdr-pdu-utils",
  "tokio",
  "tokio-util",
  "tracing",
@@ -631,6 +633,14 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sdr-pdu-utils"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "sharded-slab"

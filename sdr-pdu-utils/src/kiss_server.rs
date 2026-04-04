@@ -33,7 +33,7 @@ impl KissServer {
                             }
 
                             // First byte is command byte
-                            let cmd = frame[0] & 0x0F; // Extract command, ignore port bits
+                            let cmd = frame[0] & 0x0F;
                             if cmd == 0x00 {
                                 // Data frame, remove command byte before sending to modulator
                                 frame.remove(0);
