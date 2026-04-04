@@ -1,7 +1,7 @@
 # PlutoSDR 2FSK Gateway - Agent Hub
 
 ## Mission
-High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing KISS/CAT network protocols with the AD9361 RF transceiver.
+High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing TCP KISS/CAT network protocols with the AD9361 RF transceiver.
 
 ## Tech Stack
 - **Language:** Rust (Edition 2024)

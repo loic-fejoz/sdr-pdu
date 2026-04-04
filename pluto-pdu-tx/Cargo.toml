@@ -1,5 +1,5 @@
 [package]
-name = "pluto-tx-2fsk"
+name = "pluto-pdu-tx"
 version = "0.1.0"
 edition = "2024"
 authors = ["F4JXQ <loic@fejoz.net>"]

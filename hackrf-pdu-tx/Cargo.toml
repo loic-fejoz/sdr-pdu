@@ -1,5 +1,5 @@
 [package]
-name = "hackrf-tx-2fsk"
+name = "hackrf-pdu-tx"
 version = "0.1.0"
 edition = "2024"
 

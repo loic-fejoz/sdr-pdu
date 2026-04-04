@@ -1,7 +1,7 @@
 # Agent Guidance System: HackRF TX 2-FSK
 
 ## Mission
-Provide a high-performance, asynchronous 2-FSK transmitter for the HackRF One SDR, supporting KISS framing and CAT frequency control.
+Provide a high-performance, asynchronous 2-FSK transmitter for the HackRF One SDR, supporting TCP KISS framing and CAT frequency control.
 
 ## Critical Commands
 - **Build:** `cargo build`

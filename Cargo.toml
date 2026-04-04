@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "pluto-pdu-tx",
+    "hackrf-pdu-tx",
+    "sdr-pdu-utils",
+]
+
+resolver = "2"
