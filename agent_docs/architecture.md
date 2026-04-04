@@ -16,4 +16,5 @@
 
 ## Safety & Silence (RF Watchdog)
 - **Status:** Mandatory.
-- **Mechanism:** The `TransmissionEngine` forces the `SdrDevice` into a "disabled" state (max attenuation + zeroed DMA) during idle periods. This prevents parasitic carriers and ensures regulatory compliance during application crashes or network silence.
+- **Mechanism:** The `TransmissionEngine` forces the `SdrDevice` into a "disabled" state by setting the TX hardware gain to maximum attenuation (-89.75 dB) during idle periods. 
+- **DMA Continuity:** Avoid clearing the DAC with zero-samples between frames as it can cause DMA hangs. Attenuation alone is sufficient to suppress carriers and ensure regulatory compliance while maintaining hardware responsiveness for dynamic frequency updates (CAT).

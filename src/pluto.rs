@@ -1,4 +1,4 @@
-use industrial_io::Device;
+use industrial_io::*;
 use std::time::Duration;
 
 pub trait SdrDevice: Send {
@@ -16,6 +16,7 @@ pub struct PlutoDevice {
     actual_sample_rate: u32,
     offset: i64,
     attenuation: f64,
+    last_freq: u64,
 }
 
 impl PlutoDevice {
@@ -37,10 +38,11 @@ impl PlutoDevice {
 
         tracing::info!("Using TX device: {}", tx_dev.name().unwrap_or_default());
 
-        // Disable internal DDS
+        // Disable internal DDS more thoroughly
         for chan in tx_dev.channels() {
-            if chan.id().unwrap_or_default().starts_with("altvoltage") {
-                let _ = chan.attr_write_float("raw", 0.0);
+            if chan.id().unwrap_or_default().contains("voltage") {
+                let _ = chan.attr_write_float("scale", 0.0);
+                let _ = chan.attr_write_int("raw", 0);
             }
         }
 
@@ -56,31 +58,42 @@ impl PlutoDevice {
             offset
         );
 
-        // Set attenuation initially
+        // Set TX port to A
+        let _ = tx_phy_chan.attr_write_int("rf_port_select", 0); // Some drivers map 'A' to 0 or use strings
+
+        // Set attenuation
         let atten_val = attenuation.abs();
         let _ = tx_phy_chan.attr_write_float("hardwaregain", -atten_val);
 
-        // Set Sample Rate and Bandwidth
-        if let Err(e) = tx_phy_chan.attr_write_int("sampling_frequency", sample_rate as i64) {
-            let _ = phy.attr_write_int("sampling_frequency", sample_rate as i64);
-            tracing::warn!("PHY sampling_frequency write status: {}", e);
+        // Set Sample Rate and Bandwidth ONLY on TX channel to avoid affecting RX
+        // We check current value first to avoid unnecessary BBPLL retunes
+        let current_sr = tx_phy_chan.attr_read_int("sampling_frequency").unwrap_or(0);
+        if (current_sr as f64 - sample_rate as f64).abs() > (sample_rate as f64 * 0.01) {
+            if let Err(e) = tx_phy_chan.attr_write_int("sampling_frequency", sample_rate as i64) {
+                tracing::warn!("Failed to set TX sampling_frequency: {}", e);
+            }
         }
 
-        if let Err(e) = tx_phy_chan.attr_write_int("rf_bandwidth", bandwidth as i64) {
-            let _ = phy.attr_write_int("rf_bandwidth", bandwidth as i64);
-            tracing::warn!("PHY rf_bandwidth write status: {}", e);
+        let current_bw = tx_phy_chan.attr_read_int("rf_bandwidth").unwrap_or(0);
+        if (current_bw as f64 - bandwidth as f64).abs() > (bandwidth as f64 * 0.01) {
+            if let Err(e) = tx_phy_chan.attr_write_int("rf_bandwidth", bandwidth as i64) {
+                tracing::warn!("Failed to set TX rf_bandwidth: {}", e);
+            }
         }
 
-        // Configure Sample Rate on TX DAC
+        // Configure Sample Rate on TX DAC if possible
         if let Some(chan) = tx_dev.find_channel("voltage0", true) {
             let _ = chan.attr_write_int("sampling_frequency", sample_rate as i64);
         }
 
-        // Read back actual sample rate
+        // Read back actual sample rate from TX channel
         let actual_sample_rate = tx_phy_chan
             .attr_read_int("sampling_frequency")
             .map(|v| v as u32)
-            .unwrap_or(sample_rate);
+            .unwrap_or_else(|_| {
+                tracing::warn!("Failed to read back actual TX sampling_frequency, using requested");
+                sample_rate
+            });
 
         tracing::info!(
             "Configured SDR: Actual {} MSPS",
@@ -94,6 +107,7 @@ impl PlutoDevice {
             actual_sample_rate,
             offset,
             attenuation: atten_val,
+            last_freq: 0,
         })
     }
 }
@@ -133,54 +147,41 @@ impl SdrDevice for PlutoDevice {
             .attr_write_float("hardwaregain", -89.75)
             .map_err(|e| anyhow::anyhow!("Failed to silence TX (set gain to -89.75): {}", e))?;
 
-        // Push a short zero buffer to clear DAC/DMA
-        let n_zeros = 1024;
-
-        let mut v0 = self
-            .tx_dev
-            .find_channel("voltage0", true)
-            .ok_or_else(|| anyhow::anyhow!("TX voltage0 not found for flush"))?;
-        let mut v1 = self
-            .tx_dev
-            .find_channel("voltage1", true)
-            .ok_or_else(|| anyhow::anyhow!("TX voltage1 not found for flush"))?;
-
-        v0.enable();
-        v1.enable();
-
-        let mut buffer = self
-            .tx_dev
-            .create_buffer(n_zeros, false)
-            .map_err(|e| anyhow::anyhow!("Failed to create zero-flush buffer: {}", e))?;
-
-        let zeros = vec![0i16; n_zeros];
-        v0.write(&buffer, &zeros)
-            .map_err(|e| anyhow::anyhow!("Failed to write zero I samples: {}", e))?;
-        v1.write(&buffer, &zeros)
-            .map_err(|e| anyhow::anyhow!("Failed to write zero Q samples: {}", e))?;
-        buffer
-            .push()
-            .map_err(|e| anyhow::anyhow!("Failed to push zero-flush buffer: {}", e))?;
-
         Ok(())
     }
 
     fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {
+        if freq == self.last_freq {
+            return Ok(());
+        }
+
         let chan = self
             .phy
             .find_channel("altvoltage1", true)
             .ok_or_else(|| anyhow::anyhow!("TX LO channel (altvoltage1) not found"))?;
 
         let actual_freq = (freq as i64 + self.offset) as u64;
-        chan.attr_write_int("frequency", actual_freq as i64)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to set TX LO frequency to {} Hz (requested {}): {}",
-                    actual_freq,
-                    freq,
-                    e
-                )
-            })?;
+
+        // Ensure powerdown is 0
+        let _ = chan.attr_write_int("powerdown", 0);
+
+        // Try setting frequency on the channel
+        if let Err(e) = chan.attr_write_int("frequency", actual_freq as i64) {
+            // Fallback to device attribute if channel attribute fails
+            self.phy
+                .attr_write_int("out_altvoltage1_frequency", actual_freq as i64)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "Failed to set TX LO frequency to {} Hz (requested {}): {}",
+                        actual_freq,
+                        freq,
+                        e
+                    )
+                })?;
+        }
+
+        self.last_freq = freq;
+        tracing::info!("TX LO frequency updated to {} Hz", actual_freq);
 
         Ok(())
     }

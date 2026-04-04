@@ -11,8 +11,14 @@
 - **Fail-Safe:** In the transmission loop (`src/engine.rs`), use `error!` logging to report failures without crashing the entire service.
 
 ## Documentation & Comments
-- **Mandatory Comments:** Any code handling hardware workarounds (e.g., PlutoSDR DMA buffer persistence, DDS disabling) or optimized SIMD loops must be documented with technical rationale.
+- **Mandatory Comments:** Any code handling hardware workarounds (e.g., PlutoSDR DMA buffer persistence, DDS disabling, RX/TX PLL independence) must be documented with technical rationale.
+- **State Awareness:** Prefer state tracking (e.g., `last_freq`) and value comparison before hardware writes. Avoid redundant IIO attribute writes that force global PLL retunes or hardware glitches.
 - **Refactoring:** When refactoring, comments explaining "why" (not just "what") must be preserved or improved, never deleted.
+
+## Documentation Maintenance
+- **Additive Updates:** Updates to `README.md` or `agent_docs/` should be additive or corrective.
+- **Preservation of Context:** Never remove existing technical context, "human-centric" examples (e.g., sysroot paths, CLI usage), or architectural justifications. These are critical for onboarding and long-term maintenance.
+- **Review for Regression:** Before finalizing documentation changes, verify that no useful feature descriptions or operational instructions have been lost.
 
 ## Async & Concurrency
 - **Runtime:** `tokio::main` multi-threaded runtime.

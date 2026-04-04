@@ -6,17 +6,18 @@ A Rust-native binary designed for the **PlutoSDR (ADALM-PLUTO)**. This applicati
 
 - **Multi-Client KISS Server:** Listens on TCP port `8001` for AX.25/KISS frames.
 - **Doppler Management (CAT):** Integrated `rigctld`-compatible server on TCP port `4532` for real-time frequency correction.
-- **Optimized DSP:** Fixed-point NCO (Numerically Controlled Oscillator) with **ARM NEON SIMD** acceleration for low CPU overhead.
-- **Configurable Framing:** Built-in support for hardware preambles and syncwords.
-- **Hardware Integration:** Direct DMA access via `libiio` for low-latency RF output.
-- **Robustness:** Asynchronous networking powered by `tokio`, ensuring the transmission engine remains fed even under network jitter.
+- **Optimized DSP:** Fixed-point NCO (Numerically Controlled Oscillator) with **ARM NEON SIMD** acceleration.
+- **Configurable Framing:** Built-in support for hardware preambles and syncwords via the modulator.
+- **Hardware Coexistence:** Surgical frequency and rate management allowing the Pluto to simultaneously receive (e.g., via GQRX) while transmitting.
+- **Hardware Integration:** Direct DMA access via `libiio` with state-aware frequency tracking to minimize hardware glitches.
+- **Robustness:** Asynchronous networking powered by `tokio`, ensuring the transmission engine remains fed even under network jitter, with automatic read-back of hardware's actual sample rate for NCO precision.
 
 ## Architecture
 
 1.  **Network Ingest:** KISS frames are received, validated, and stripped of command bytes.
 2.  **Frequency Control:** The CAT server updates a shared frequency variable (AtomicU64) used by the transmission engine.
-3.  **Modulation:** Data is modulated into I/Q samples at baseband using a continuous-phase 2FSK algorithm.
-4.  **RF Output:** Samples are pushed to the PlutoSDR's TX DMA via the `industrial-io` bindings.
+3.  **Modulation:** Data is modulated into I/Q samples at baseband using a continuous-phase 2FSK algorithm. The NCO uses the **actual hardware sample rate** read back from the AD9361 to ensure frequency accuracy.
+4.  **RF Output:** Samples are pushed to the PlutoSDR's TX DMA. PLL parameters (Sample Rate/Bandwidth) are set strictly on the TX channel to avoid interfering with concurrent RX applications.
 
 ## Installation & Build
 
@@ -49,6 +50,7 @@ Options:
       --kiss-port <KISS_PORT>         TCP port for KISS [default: 8001]
       --cat-port <CAT_PORT>           TCP port for CAT (rigctld) [default: 4532]
   -f, --frequency <FREQUENCY>         Initial frequency in Hz [default: 144000000]
+      --offset <OFFSET>               Frequency offset in Hz (to compensate for PPM) [default: 0]
   -b, --baud-rate <BAUD_RATE>         Baud rate [default: 9600]
   -d, --deviation <DEVIATION>         FSK deviation in Hz [default: 2400]
   -s, --sample-rate <SAMPLE_RATE>     SDR sample rate (Min ~2.1MSPS) [default: 2100000]
@@ -87,6 +89,10 @@ By default, the PlutoSDR (AD9363) is restricted to **325 MHz - 3.8 GHz**. To ope
    reboot
    ```
 For detailed instructions, refer to the [Analog Devices Wiki: Customizing PlutoSDR](https://wiki.analog.com/university/tools/pluto/users/customizing).
+
+### Note on Hardware Coexistence
+
+This application is designed to be "GQRX-friendly." By setting the sample rate and bandwidth strictly on the TX physical channel (rather than the device level), it avoids forcing a global BBPLL retune. This allows you to monitor your own transmission or receive on a different frequency without GQRX losing its lock or experiencing frequency shifts when `pluto-tx-2fsk` starts or changes parameters.
 
 ## Development
 

@@ -11,8 +11,9 @@ High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing KISS/CAT netwo
 - **CLI:** Clap v4 (Argument Parsing)
 
 ## Development Principles
-- **Context Preservation:** NEVER remove technical comments explaining hardware workarounds, SIMD logic, or critical timing (e.g., buffer persistence).
-- **Error Integrity:** Always use `anyhow::Context` or `map_err` to provide granular details (sample counts, attribute names, requested vs. actual values). Diagnostic quality must never be sacrificed for brevity.
+- **Context Preservation:** NEVER remove technical comments explaining hardware workarounds, SIMD logic, or critical timing.
+- **Documentation Integrity:** When updating `README.md` or `agent_docs`, ensure that existing technical context, "human-centric" instructions (e.g., cross-compilation examples), and feature descriptions are preserved or refined. Never delete useful documentation to "clean up" unless it is factually incorrect.
+- **Error Integrity:** Always use `anyhow::Context` or `map_err` to provide granular details.
 
 ## Critical Commands
 - **Install:** `cargo fetch`
