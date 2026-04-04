@@ -76,7 +76,7 @@ struct Args {
     scramble: bool,
 
     /// Scrambler polynomial (hex bitmask). Default G3RUH: x^17 + x^12 + 1 -> bit 16 and 11 set -> 0x21000 (shifted by 1 for multiplicative logic)
-    /// Actually standard G3RUH bits are 12 and 17. 
+    /// Actually standard G3RUH bits are 12 and 17.
     /// If we use 0-indexed: bits 11 and 16.
     /// 1<<11 | 1<<16 = 0x800 | 0x10000 = 0x10800.
     #[arg(long, default_value = "0x10800")]
@@ -96,14 +96,9 @@ async fn main() -> anyhow::Result<()> {
     let freq = Arc::new(AtomicU64::new(args.frequency));
 
     // Initialize HackRF
-    let device = HackRfDevice::new(
-        args.sample_rate,
-        args.tx_vga,
-        args.amp_enable,
-        args.offset,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("HackRF init failed: {}", e))?;
+    let device = HackRfDevice::new(args.sample_rate, args.tx_vga, args.amp_enable, args.offset)
+        .await
+        .map_err(|e| anyhow::anyhow!("HackRF init failed: {}", e))?;
 
     let mut modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
 

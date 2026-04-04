@@ -11,14 +11,14 @@ impl Scrambler {
     }
 
     /// Process a single bit through the multiplicative scrambler.
-    /// Standard G3RUH: poly = 1 + x^12 + x^17. 
+    /// Standard G3RUH: poly = 1 + x^12 + x^17.
     /// In bitmask form, bit 12 and 17 are set.
     pub fn scramble_bit(&mut self, bit: u8) -> u8 {
         // Calculate the XOR sum of bits defined by the polynomial
         // state & poly picks the bits to XOR.
         let xor_sum = (self.state & self.poly).count_ones() % 2;
         let out_bit = (bit as u32 ^ xor_sum) as u8 & 1;
-        
+
         // Shift state and insert the NEW bit (multiplicative scrambler)
         self.state = (self.state << 1) | (out_bit as u32);
         out_bit
@@ -75,7 +75,7 @@ impl FskModulator {
         }
         data.extend_from_slice(&syncword);
 
-        // Modulate preamble/syncword WITHOUT resetting scrambler? 
+        // Modulate preamble/syncword WITHOUT resetting scrambler?
         // Usually, the scrambler is NOT reset between preamble and data in G3RUH.
         // But for the preamble_syncword_iq cache, we must be careful.
         // We modulate it once and cache it.
@@ -139,7 +139,7 @@ impl FskModulator {
         for &byte in data {
             for bit_idx in 0..8 {
                 let mut bit = (byte >> (7 - bit_idx)) & 1;
-                
+
                 if let Some(ref mut scr) = self.scrambler {
                     bit = scr.scramble_bit(bit);
                 }
@@ -200,26 +200,28 @@ mod tests {
     #[test]
     fn test_scrambler_g3ruh() {
         // G3RUH: bits 12 and 17 (1-indexed) -> bits 11 and 16 (0-indexed)
-        let poly = (1 << 11) | (1 << 16); 
+        let poly = (1 << 11) | (1 << 16);
         let mut scr = Scrambler::new(poly, 0);
-        
+
         // Input: all zeros
         assert_eq!(scr.scramble_bit(0), 0);
-        
+
         // Input: 1
         // out = 1 ^ (ones(0 & poly)%2) = 1. state = 1 (bit 0 set)
         assert_eq!(scr.scramble_bit(1), 1);
-        
+
         // After 11 MORE shifts (total 12 bits processed), the first '1' reaches bit 11
-        for _ in 0..10 { scr.scramble_bit(0); }
+        for _ in 0..10 {
+            scr.scramble_bit(0);
+        }
         // The state before the next call has bit 10 set.
         // Wait, if state is (state << 1) | bit.
         // Bit 0: 1. state = 1.
         // Bit 1: 0. state = 10 (binary).
         // ...
         // Bit 11: 0. state = 100000000000 (binary) -> bit 11 is 1.
-        scr.scramble_bit(0); 
-        
+        scr.scramble_bit(0);
+
         // Now bit 11 of state is 1.
         // Input 0: out = 0 ^ (ones(state & poly)%2) = 0 ^ 1 = 1.
         assert_eq!(scr.scramble_bit(0), 1);

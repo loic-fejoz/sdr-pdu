@@ -11,7 +11,7 @@ Note that I am using the term PDU instead of packet/frame so as to not confuse w
 ## Tools
 
 - `hackrf-pdu-tx`: a TCP KISS and CAT server to send 2FSK frames over an HackRF
-- `pluto-pdu-tx`: a TCP KISS and CAT server to send 2FSK frames over an HackRF
+- `pluto-pdu-tx`: a TCP KISS and CAT server to send 2FSK frames over a PlutoSDR
 - `sdr-pdu-utils`: a Rust crate for shared code
 
 ## License
