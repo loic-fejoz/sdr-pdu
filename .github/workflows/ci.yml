@@ -87,11 +87,17 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-arm-linux-gnueabihf pkg-config
+    - name: Cache PlutoSDR Sysroot
+      id: cache-sysroot
+      uses: actions/cache@v4
+      with:
+        path: sysroot
+        key: sysroot-v0.30
     - name: Download PlutoSDR Sysroot
+      if: steps.cache-sysroot.outputs.cache-hit != 'true'
       run: |
         wget https://github.com/analogdevicesinc/plutosdr-fw/releases/download/v0.30/sysroot-v0.30.tar.gz
         tar -xzvf sysroot-v0.30.tar.gz
-        # The tarball extracts into a directory named 'sysroot-v0.30'
         mv sysroot-v0.30 sysroot
         # Ensure libiio.so symlink exists for the linker
         if [ ! -f sysroot/usr/lib/libiio.so ] && [ -f sysroot/usr/lib/libiio.so.0 ]; then
