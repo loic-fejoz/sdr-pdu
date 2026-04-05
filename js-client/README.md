@@ -1,11 +1,12 @@
 # sdr-pdu-kiss-ws
 
-A lightweight JavaScript client library for interacting with the `sdr-pdu` (Software Defined Radio - Protocol Data Unit) servers over WebSocket using the KISS protocol.
+A lightweight JavaScript client for interacting with the `sdr-pdu` servers over WebSockets using the KISS protocol.
 
 ## Features
-- Connect to `hackrf-pdu-tx` or `pluto-pdu-tx` servers running the KISS WebSocket service.
-- Automatically handles KISS framing and byte escaping (FEND/FESC).
-- Transmits raw `Uint8Array` payloads seamlessly to be broadcasted via SDR.
+
+- Connect to `direwolf`, `hackrf-pdu-tx`, `pluto-pdu-tx`, or `pdu-proxy` via WebSockets.
+- Handles KISS framing and byte escaping (FEND/FESC) automatically.
+- Sends and receives raw `Uint8Array` payloads.
 
 ## Usage
 
@@ -22,7 +23,7 @@ sdrClient.addEventListener('open', () => {
     const textEncoder = new TextEncoder();
     const payload = textEncoder.encode("Hello over SDR!");
     
-    // Send the frame!
+    // Send the frame
     sdrClient.sendFrame(payload);
 });
 
@@ -36,20 +37,24 @@ sdrClient.connect();
 ## API
 
 ### `new KissWebSocket(url)`
-Creates a new client instance for the specified WebSocket URL.
+Creates a new client for the given WebSocket URL.
 
 ### `connect()`
-Initiates the WebSocket connection.
+Starts the WebSocket connection.
 
 ### `disconnect()`
 Closes the WebSocket connection.
 
 ### `sendFrame(payload: Uint8Array, command: number = 0x00)`
-Wraps the provided `Uint8Array` in KISS framing, escapes special characters (`FEND`, `FESC`), and sends the binary message over the WebSocket.
+Wraps the payload in KISS framing, escapes special characters, and sends it over the WebSocket.
 
 ### Events
-The class extends `EventTarget` and emits the following events:
-- `open`: Emitted when the connection is established.
-- `close`: Emitted when the connection is closed.
-- `error`: Emitted on connection errors.
-- `frame`: Emitted when an incoming KISS frame is successfully decoded (provides the `Uint8Array` payload via `event.detail`).
+The class extends `EventTarget` and emits these events:
+- `open`: When the connection is established.
+- `close`: When the connection is closed.
+- `error`: On connection errors.
+- `frame`: When an incoming KISS frame is successfully decoded. The payload is in `event.detail`.
+
+## License
+
+MIT or Apache 2.0.

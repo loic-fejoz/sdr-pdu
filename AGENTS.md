@@ -8,6 +8,8 @@ Develop a set of utility tools to use SDR radios like plutosdr, hackrf, or MMDVM
 
 - `hackrf-pdu-tx`: a KISS and CAT server to send 2FSK frames over an HackRF
 - `pluto-pdu-tx`: a KISS and CAT server to send 2FSK frames over a PlutoSDR
+- `pdu-proxy`: a TCP/WS KISS proxy for TCP KISS.
+- `sdr-pdu-utils`: a Rust crate for shared code
 
 You must read individual `AGENTS.md` files to follow their own guidelines.
 
