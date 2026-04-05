@@ -27,6 +27,17 @@ sdrClient.addEventListener('open', () => {
     sdrClient.sendFrame(payload);
 });
 
+// Receive and handle incoming frames
+sdrClient.addEventListener('frame', (event) => {
+    const payload = event.detail; // Uint8Array
+    console.log('Received frame:', payload);
+    
+    // If the payload is a string, decode it
+    const textDecoder = new TextDecoder();
+    const message = textDecoder.decode(payload);
+    console.log('Decoded message:', message);
+});
+
 sdrClient.addEventListener('error', (e) => {
     console.error('WebSocket Error:', e.error);
 });
