@@ -98,7 +98,8 @@ jobs:
       run: |
         wget https://github.com/analogdevicesinc/plutosdr-fw/releases/download/v0.30/sysroot-v0.30.tar.gz
         tar -xzvf sysroot-v0.30.tar.gz
-        mv sysroot-v0.30 sysroot
+        # The tarball extracts into a directory named 'staging'
+        mv staging sysroot
         # Ensure libiio.so symlink exists for the linker
         if [ ! -f sysroot/usr/lib/libiio.so ] && [ -f sysroot/usr/lib/libiio.so.0 ]; then
           ln -s libiio.so.0 sysroot/usr/lib/libiio.so
