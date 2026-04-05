@@ -21,7 +21,7 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libiio-dev
+        sudo apt-get install -y libiio-dev pkg-config
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
     - name: Run fmt
@@ -86,12 +86,17 @@ jobs:
     - name: Install Cross-Compiler
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-arm-linux-gnueabihf
+        sudo apt-get install -y gcc-arm-linux-gnueabihf pkg-config
     - name: Download PlutoSDR Sysroot
       run: |
         wget https://github.com/analogdevicesinc/plutosdr-fw/releases/download/v0.30/sysroot-v0.30.tar.gz
-        mkdir sysroot
-        tar -xzvf sysroot-v0.30.tar.gz -C sysroot
+        tar -xzvf sysroot-v0.30.tar.gz
+        # The tarball extracts into a directory named 'sysroot-v0.30'
+        mv sysroot-v0.30 sysroot
+        # Ensure libiio.so symlink exists for the linker
+        if [ ! -f sysroot/usr/lib/libiio.so ] && [ -f sysroot/usr/lib/libiio.so.0 ]; then
+          ln -s libiio.so.0 sysroot/usr/lib/libiio.so
+        fi
     - name: Build pluto-pdu-tx
       run: |
         # We need to provide the sysroot path to the Makefile
