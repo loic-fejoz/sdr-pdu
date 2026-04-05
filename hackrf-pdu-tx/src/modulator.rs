@@ -140,6 +140,44 @@ impl FskModulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quickcheck_macros::quickcheck;
+
+    struct Descrambler {
+        state: u32,
+        poly: u32,
+    }
+
+    impl Descrambler {
+        fn new(poly: u32, seed: u32) -> Self {
+            Self { state: seed, poly }
+        }
+
+        fn descramble_bit(&mut self, bit: u8) -> u8 {
+            let xor_sum = (self.state & self.poly).count_ones() % 2;
+            let out_bit = (bit as u32 ^ xor_sum) as u8 & 1;
+            self.state = (self.state << 1) | (bit as u32);
+            out_bit
+        }
+    }
+
+    #[quickcheck]
+    fn prop_scrambler_roundtrip(data: Vec<u8>, poly: u32, seed: u32) -> bool {
+        let poly = poly & 0x1FFFF; // Mask to 17 bits for G3RUH-like
+        let mut scr = Scrambler::new(poly, seed);
+        let mut descr = Descrambler::new(poly, seed);
+
+        for byte in data {
+            for i in 0..8 {
+                let bit = (byte >> (7 - i)) & 1;
+                let scrambled = scr.scramble_bit(bit);
+                let descrambled = descr.descramble_bit(scrambled);
+                if bit != descrambled {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 
     #[test]
     fn test_modulator_length() {

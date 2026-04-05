@@ -91,6 +91,35 @@ impl Encoder<Vec<u8>> for KissEncoder {
 mod tests {
     use super::*;
     use bytes::BytesMut;
+    use quickcheck_macros::quickcheck;
+
+    #[quickcheck]
+    fn prop_kiss_decoder_no_panic(data: Vec<u8>) -> bool {
+        let mut decoder = KissDecoder;
+        let mut buf = BytesMut::from(&data[..]);
+        let _ = decoder.decode(&mut buf);
+        true
+    }
+
+    #[quickcheck]
+    fn prop_kiss_roundtrip(data: Vec<u8>) -> bool {
+        if data.is_empty() {
+            return true;
+        }
+
+        let mut encoder = KissEncoder;
+        let mut decoder = KissDecoder;
+        let mut buf = BytesMut::new();
+        
+        if encoder.encode(data.clone(), &mut buf).is_err() {
+            return false;
+        }
+        
+        match decoder.decode(&mut buf) {
+            Ok(Some(decoded)) => decoded == data,
+            _ => false,
+        }
+    }
 
     #[test]
     fn test_kiss_decode_simple() {

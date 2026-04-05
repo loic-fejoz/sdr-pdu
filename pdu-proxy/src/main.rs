@@ -225,6 +225,27 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use quickcheck_macros::quickcheck;
+
+    #[quickcheck]
+    fn prop_args_parsing(source_port: u16, listen_port: u16, ws_port: u16) -> bool {
+        let source = format!("127.0.0.1:{}", source_port);
+        let listen = format!("0.0.0.0:{}", listen_port);
+        let ws = format!("0.0.0.0:{}", ws_port);
+
+        let args = Args::try_parse_from(&[
+            "pdu-proxy",
+            "--source", &source,
+            "--tcp-listen", &listen,
+            "--ws-listen", &ws,
+        ]);
+
+        if let Ok(args) = args {
+            args.source == source && args.tcp_listen == listen && args.ws_listen == ws
+        } else {
+            false
+        }
+    }
 
     #[test]
     fn test_args_parsing_simple() {
