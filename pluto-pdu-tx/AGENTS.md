@@ -14,11 +14,12 @@ High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing TCP KISS/CAT n
 - **Context Preservation:** NEVER remove technical comments explaining hardware workarounds, SIMD logic, or critical timing.
 - **Documentation Integrity:** When updating `README.md` or `agent_docs`, ensure that existing technical context, "human-centric" instructions (e.g., cross-compilation examples), and feature descriptions are preserved or refined. Never delete useful documentation to "clean up" unless it is factually incorrect.
 - **Error Integrity:** Always use `anyhow::Context` or `map_err` to provide granular details.
+- **Global Standards:** Adhere to the **[Global Conventions](../../agent_docs/conventions.md)**.
 
 ## Critical Commands
 - **Install:** `cargo fetch`
 - **Test:** `make test` (MANDATORY before task completion)
-- **Lint:** `cargo fmt && cargo clippy`
+- **Lint:** `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings`
 - **Build:** `make release-pluto` (Cross-compilation for PlutoSDR)
 
 ## Documentation Index
@@ -31,4 +32,4 @@ High-performance 2FSK gateway for PlutoSDR (ARMv7-A), interfacing TCP KISS/CAT n
 - `agent_docs/hardware_iio.md`
   - **Trigger:** When changing RF parameters (LO, Gain, Sample Rate), IIO device paths, or cross-compilation settings (SYSROOT).
 
-**Verification Loop:** You MUST run `make test` and ensure all unit tests pass, AND run `cargo fmt` and `cargo clippy` to ensure code quality, before declaring any implementation or fix as "done".
+**Verification Loop:** You MUST run `make test` and ensure all unit tests pass, AND run `cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` to ensure code quality, before declaring any implementation or fix as "done".

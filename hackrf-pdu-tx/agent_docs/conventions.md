@@ -1,5 +1,7 @@
 # Conventions: HackRF TX 2-FSK
 
+This project follows the **[Global Conventions](../../agent_docs/conventions.md)**.
+
 ## Project Principles
 1. **Async-First**: All I/O (SDR, TCP, KISS) must remain non-blocking. Use `tokio` for scheduling.
 2. **Deterministic Errors**: Use `anyhow::Result` for application-level logic and `.context()` to provide traceable hardware error messages.
@@ -16,7 +18,3 @@
   - `warn!`: Non-fatal hardware issues or invalid KISS frames.
   - `error!`: Fatal connection drops or SDR failure.
 - Avoid repetitive logs in the modulator or NCO. Log only at the `engine.rs` level for each transmitted frame.
-
-## Code Style
-- Follow the standard Rust style. Run `cargo fmt` before every commit.
-- Use `#[cfg(test)]` to keep test utilities out of release binaries.

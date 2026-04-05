@@ -1,10 +1,9 @@
 # pdu-proxy Coding Conventions
 
+This project follows the **[Global Conventions](../../agent_docs/conventions.md)**.
+
 ## Rust Guidelines
 - **Edition:** Rust 2024.
-- **Formatting:** Code MUST be formatted with `cargo fmt`. Use standard Rust naming conventions.
-- **Error Handling:** Use the `anyhow` crate to handle and propagate errors (`anyhow::Result`).
-- **Dependencies:** Rely heavily on workspace dependencies to keep crate versions in sync (e.g. `tokio = { workspace = true }`).
 - **Async Runtime:** `tokio` is the primary runtime. Favor idiomatic `tokio` constructs (e.g., `tokio::select!`, `tokio::spawn`, `tokio::sync` channels). Use `tokio_util::codec` for framing where possible.
 - **Web & Routing:** Use `axum` for HTTP and WebSocket implementations. Avoid `warp` or bare `hyper` configurations unless required.
 

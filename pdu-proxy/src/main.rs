@@ -221,73 +221,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-    use quickcheck_macros::quickcheck;
-
-    #[quickcheck]
-    fn prop_args_parsing(source_port: u16, listen_port: u16, ws_port: u16) -> bool {
-        let source = format!("127.0.0.1:{}", source_port);
-        let listen = format!("0.0.0.0:{}", listen_port);
-        let ws = format!("0.0.0.0:{}", ws_port);
-
-        let args = Args::try_parse_from(&[
-            "pdu-proxy",
-            "--source",
-            &source,
-            "--tcp-listen",
-            &listen,
-            "--ws-listen",
-            &ws,
-        ]);
-
-        if let Ok(args) = args {
-            args.source == source && args.tcp_listen == listen && args.ws_listen == ws
-        } else {
-            false
-        }
-    }
-
-    #[test]
-    fn test_args_parsing_simple() {
-        let args = Args::try_parse_from(&[
-            "pdu-proxy",
-            "--source",
-            "127.0.0.1:8001",
-            "--tcp-listen",
-            "0.0.0.0:8002",
-            "--ws-listen",
-            "0.0.0.0:8003",
-        ])
-        .unwrap();
-        assert_eq!(args.source, "127.0.0.1:8001");
-        assert_eq!(args.target, None);
-        assert_eq!(args.tcp_listen, "0.0.0.0:8002");
-        assert_eq!(args.ws_listen, "0.0.0.0:8003");
-        assert_eq!(args.http_dir, None);
-    }
-
-    #[test]
-    fn test_args_parsing_split() {
-        let args = Args::try_parse_from(&[
-            "pdu-proxy",
-            "--source",
-            "127.0.0.1:8001",
-            "--target",
-            "127.0.0.1:8004",
-            "--tcp-listen",
-            "0.0.0.0:8002",
-            "--ws-listen",
-            "0.0.0.0:8003",
-        ])
-        .unwrap();
-        assert_eq!(args.source, "127.0.0.1:8001");
-        assert_eq!(args.target, Some("127.0.0.1:8004".to_string()));
-    }
-}
-
 async fn ws_handler(
     ws: WebSocketUpgrade,
     axum::extract::State(state): axum::extract::State<AppState>,
@@ -361,5 +294,72 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use quickcheck_macros::quickcheck;
+
+    #[quickcheck]
+    fn prop_args_parsing(source_port: u16, listen_port: u16, ws_port: u16) -> bool {
+        let source = format!("127.0.0.1:{}", source_port);
+        let listen = format!("0.0.0.0:{}", listen_port);
+        let ws = format!("0.0.0.0:{}", ws_port);
+
+        let args = Args::try_parse_from([
+            "pdu-proxy",
+            "--source",
+            &source,
+            "--tcp-listen",
+            &listen,
+            "--ws-listen",
+            &ws,
+        ]);
+
+        if let Ok(args) = args {
+            args.source == source && args.tcp_listen == listen && args.ws_listen == ws
+        } else {
+            false
+        }
+    }
+
+    #[test]
+    fn test_args_parsing_simple() {
+        let args = Args::try_parse_from([
+            "pdu-proxy",
+            "--source",
+            "127.0.0.1:8001",
+            "--tcp-listen",
+            "0.0.0.0:8002",
+            "--ws-listen",
+            "0.0.0.0:8003",
+        ])
+        .unwrap();
+        assert_eq!(args.source, "127.0.0.1:8001");
+        assert_eq!(args.target, None);
+        assert_eq!(args.tcp_listen, "0.0.0.0:8002");
+        assert_eq!(args.ws_listen, "0.0.0.0:8003");
+        assert_eq!(args.http_dir, None);
+    }
+
+    #[test]
+    fn test_args_parsing_split() {
+        let args = Args::try_parse_from([
+            "pdu-proxy",
+            "--source",
+            "127.0.0.1:8001",
+            "--target",
+            "127.0.0.1:8004",
+            "--tcp-listen",
+            "0.0.0.0:8002",
+            "--ws-listen",
+            "0.0.0.0:8003",
+        ])
+        .unwrap();
+        assert_eq!(args.source, "127.0.0.1:8001");
+        assert_eq!(args.target, Some("127.0.0.1:8004".to_string()));
     }
 }
