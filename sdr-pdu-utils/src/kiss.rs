@@ -1,6 +1,6 @@
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use std::io;
-use tokio_util::codec::Decoder;
+use tokio_util::codec::{Decoder, Encoder};
 
 const FEND: u8 = 0xC0;
 const FESC: u8 = 0xDB;
@@ -61,6 +61,32 @@ impl Decoder for KissDecoder {
     }
 }
 
+pub struct KissEncoder;
+
+impl Encoder<Vec<u8>> for KissEncoder {
+    type Error = io::Error;
+
+    fn encode(&mut self, item: Vec<u8>, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.reserve(item.len() * 2 + 2);
+        dst.put_u8(FEND);
+        for byte in item {
+            match byte {
+                FEND => {
+                    dst.put_u8(FESC);
+                    dst.put_u8(TFEND);
+                }
+                FESC => {
+                    dst.put_u8(FESC);
+                    dst.put_u8(TFESC);
+                }
+                b => dst.put_u8(b),
+            }
+        }
+        dst.put_u8(FEND);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +130,34 @@ mod tests {
 
         let res2 = decoder.decode(&mut buf).unwrap();
         assert_eq!(res2, Some(vec![0x02]));
+    }
+
+    #[test]
+    fn test_kiss_encode_simple() {
+        let mut encoder = KissEncoder;
+        let mut buf = BytesMut::new();
+        encoder.encode(vec![0x00, 0x01, 0x02, 0x03], &mut buf).unwrap();
+        assert_eq!(buf, &[FEND, 0x00, 0x01, 0x02, 0x03, FEND][..]);
+    }
+
+    #[test]
+    fn test_kiss_encode_escaped() {
+        let mut encoder = KissEncoder;
+        let mut buf = BytesMut::new();
+        encoder.encode(vec![0x00, FEND, FESC, 0x05], &mut buf).unwrap();
+        assert_eq!(buf, &[FEND, 0x00, FESC, TFEND, FESC, TFESC, 0x05, FEND][..]);
+    }
+
+    #[test]
+    fn test_kiss_roundtrip() {
+        let mut encoder = KissEncoder;
+        let mut decoder = KissDecoder;
+        let mut buf = BytesMut::new();
+        let original = vec![0x00, 0xF0, FEND, FESC, 0x05];
+        
+        encoder.encode(original.clone(), &mut buf).unwrap();
+        let decoded = decoder.decode(&mut buf).unwrap().unwrap();
+        
+        assert_eq!(decoded, original);
     }
 }

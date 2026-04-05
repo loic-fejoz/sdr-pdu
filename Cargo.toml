@@ -4,6 +4,7 @@ members = [
     "pluto-pdu-tx",
     "hackrf-pdu-tx",
     "sdr-pdu-utils",
+    "pdu-proxy",
 ]
 
 resolver = "2"
