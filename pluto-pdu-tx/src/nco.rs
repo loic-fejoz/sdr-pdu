@@ -111,11 +111,13 @@ mod tests {
     fn prop_nco_fill_buffer_equivalent(lut_bits: u8, phase_inc: u32, num_samples: u8) -> bool {
         let lut_bits = (lut_bits % 12) + 4; // 4 to 15 bits
         let num_samples = num_samples as usize;
-        if num_samples == 0 { return true; }
+        if num_samples == 0 {
+            return true;
+        }
 
         let mut nco1 = TableNco::new(lut_bits as u32);
         let mut nco2 = TableNco::new(lut_bits as u32);
-        
+
         // Advance nco1 via next()
         let mut samples_next = Vec::with_capacity(num_samples * 2);
         for _ in 0..num_samples {

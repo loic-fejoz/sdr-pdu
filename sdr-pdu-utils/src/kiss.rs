@@ -110,11 +110,11 @@ mod tests {
         let mut encoder = KissEncoder;
         let mut decoder = KissDecoder;
         let mut buf = BytesMut::new();
-        
+
         if encoder.encode(data.clone(), &mut buf).is_err() {
             return false;
         }
-        
+
         match decoder.decode(&mut buf) {
             Ok(Some(decoded)) => decoded == data,
             _ => false,
@@ -165,7 +165,9 @@ mod tests {
     fn test_kiss_encode_simple() {
         let mut encoder = KissEncoder;
         let mut buf = BytesMut::new();
-        encoder.encode(vec![0x00, 0x01, 0x02, 0x03], &mut buf).unwrap();
+        encoder
+            .encode(vec![0x00, 0x01, 0x02, 0x03], &mut buf)
+            .unwrap();
         assert_eq!(buf, &[FEND, 0x00, 0x01, 0x02, 0x03, FEND][..]);
     }
 
@@ -173,7 +175,9 @@ mod tests {
     fn test_kiss_encode_escaped() {
         let mut encoder = KissEncoder;
         let mut buf = BytesMut::new();
-        encoder.encode(vec![0x00, FEND, FESC, 0x05], &mut buf).unwrap();
+        encoder
+            .encode(vec![0x00, FEND, FESC, 0x05], &mut buf)
+            .unwrap();
         assert_eq!(buf, &[FEND, 0x00, FESC, TFEND, FESC, TFESC, 0x05, FEND][..]);
     }
 
@@ -183,10 +187,10 @@ mod tests {
         let mut decoder = KissDecoder;
         let mut buf = BytesMut::new();
         let original = vec![0x00, 0xF0, FEND, FESC, 0x05];
-        
+
         encoder.encode(original.clone(), &mut buf).unwrap();
         let decoded = decoder.decode(&mut buf).unwrap().unwrap();
-        
+
         assert_eq!(decoded, original);
     }
 }

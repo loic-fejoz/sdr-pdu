@@ -1,8 +1,8 @@
 use axum::{
+    Router,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use clap::Parser;
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -235,9 +235,12 @@ mod tests {
 
         let args = Args::try_parse_from(&[
             "pdu-proxy",
-            "--source", &source,
-            "--tcp-listen", &listen,
-            "--ws-listen", &ws,
+            "--source",
+            &source,
+            "--tcp-listen",
+            &listen,
+            "--ws-listen",
+            &ws,
         ]);
 
         if let Ok(args) = args {
@@ -251,10 +254,14 @@ mod tests {
     fn test_args_parsing_simple() {
         let args = Args::try_parse_from(&[
             "pdu-proxy",
-            "--source", "127.0.0.1:8001",
-            "--tcp-listen", "0.0.0.0:8002",
-            "--ws-listen", "0.0.0.0:8003",
-        ]).unwrap();
+            "--source",
+            "127.0.0.1:8001",
+            "--tcp-listen",
+            "0.0.0.0:8002",
+            "--ws-listen",
+            "0.0.0.0:8003",
+        ])
+        .unwrap();
         assert_eq!(args.source, "127.0.0.1:8001");
         assert_eq!(args.target, None);
         assert_eq!(args.tcp_listen, "0.0.0.0:8002");
@@ -266,11 +273,16 @@ mod tests {
     fn test_args_parsing_split() {
         let args = Args::try_parse_from(&[
             "pdu-proxy",
-            "--source", "127.0.0.1:8001",
-            "--target", "127.0.0.1:8004",
-            "--tcp-listen", "0.0.0.0:8002",
-            "--ws-listen", "0.0.0.0:8003",
-        ]).unwrap();
+            "--source",
+            "127.0.0.1:8001",
+            "--target",
+            "127.0.0.1:8004",
+            "--tcp-listen",
+            "0.0.0.0:8002",
+            "--ws-listen",
+            "0.0.0.0:8003",
+        ])
+        .unwrap();
         assert_eq!(args.source, "127.0.0.1:8001");
         assert_eq!(args.target, Some("127.0.0.1:8004".to_string()));
     }
