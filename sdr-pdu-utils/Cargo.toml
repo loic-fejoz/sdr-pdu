@@ -11,3 +11,5 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
+quickcheck = { workspace = true }
+quickcheck_macros = { workspace = true }

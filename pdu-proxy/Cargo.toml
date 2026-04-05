@@ -1,19 +1,20 @@
 [package]
-name = "hackrf-pdu-tx"
+name = "pdu-proxy"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+sdr-pdu-utils = { path = "../sdr-pdu-utils" }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
-crossbeam = "0.8.4"
 futures = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-waverave-hackrf = "0.1.2"
 quickcheck = { workspace = true }
 quickcheck_macros = { workspace = true }
-sdr-pdu-utils = { path = "../sdr-pdu-utils" }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs"] }

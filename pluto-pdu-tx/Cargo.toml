@@ -16,6 +16,8 @@ futures = { workspace = true }
 num-complex = "0.4"
 industrial-io = "0.6.1"
 clap = { workspace = true }
+quickcheck = { workspace = true }
+quickcheck_macros = { workspace = true }
 sdr-pdu-utils = { path = "../sdr-pdu-utils" }
 # libiio and libad9361 bindings will be needed later, 
 # but for unit tests of KISS/CAT/NCO we can start without them or with stubs.
