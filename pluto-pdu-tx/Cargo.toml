@@ -14,7 +14,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 num-complex = "0.4"
-industrial-io = "0.3"
+industrial-io = "0.6.1"
 clap = { workspace = true }
 sdr-pdu-utils = { path = "../sdr-pdu-utils" }
 # libiio and libad9361 bindings will be needed later, 

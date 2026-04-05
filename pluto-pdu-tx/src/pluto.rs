@@ -47,7 +47,7 @@ impl PlutoDevice {
         }
 
         let tx_phy_chan = phy
-            .find_channel("voltage0", true)
+            .find_channel("voltage0", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("PHY TX channel (voltage0) not found"))?;
 
         tracing::info!(
@@ -82,7 +82,7 @@ impl PlutoDevice {
         }
 
         // Configure Sample Rate on TX DAC if possible
-        if let Some(chan) = tx_dev.find_channel("voltage0", true) {
+        if let Some(chan) = tx_dev.find_channel("voltage0", Direction::Output) {
             let _ = chan.attr_write_int("sampling_frequency", sample_rate as i64);
         }
 
@@ -122,7 +122,7 @@ impl SdrDevice for PlutoDevice {
     fn enable_tx(&mut self) -> anyhow::Result<()> {
         let tx_phy_chan = self
             .phy
-            .find_channel("voltage0", true)
+            .find_channel("voltage0", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("PHY TX channel not found"))?;
         tx_phy_chan
             .attr_write_float("hardwaregain", -self.attenuation)
@@ -139,7 +139,7 @@ impl SdrDevice for PlutoDevice {
     fn disable_tx(&mut self) -> anyhow::Result<()> {
         let tx_phy_chan = self
             .phy
-            .find_channel("voltage0", true)
+            .find_channel("voltage0", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("PHY TX channel not found"))?;
 
         // Max attenuation to mute TX leakage
@@ -157,7 +157,7 @@ impl SdrDevice for PlutoDevice {
 
         let chan = self
             .phy
-            .find_channel("altvoltage1", true)
+            .find_channel("altvoltage1", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("TX LO channel (altvoltage1) not found"))?;
 
         let actual_freq = (freq as i64 + self.offset) as u64;
@@ -192,13 +192,13 @@ impl SdrDevice for PlutoDevice {
             return Ok(());
         }
 
-        let mut v0 = self
+        let v0 = self
             .tx_dev
-            .find_channel("voltage0", true)
+            .find_channel("voltage0", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("TX voltage0 not found"))?;
-        let mut v1 = self
+        let v1 = self
             .tx_dev
-            .find_channel("voltage1", true)
+            .find_channel("voltage1", Direction::Output)
             .ok_or_else(|| anyhow::anyhow!("TX voltage1 not found"))?;
 
         v0.enable();
@@ -206,7 +206,7 @@ impl SdrDevice for PlutoDevice {
 
         let duration_ms = (n_samples as f64 * 1000.0 / self.actual_sample_rate as f64) as u64;
 
-        let mut buffer = self.tx_dev.create_buffer(n_samples, false).map_err(|e| {
+        let buffer = self.tx_dev.create_buffer(n_samples, false).map_err(|e| {
             anyhow::anyhow!("Failed to create TX DMA buffer (len={}): {}", n_samples, e)
         })?;
 
