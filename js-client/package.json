@@ -1,0 +1,18 @@
+{
+  "name": "sdr-pdu-kiss-ws",
+  "version": "1.0.0",
+  "description": "A JavaScript library to interact with SDR PDU TX servers over WebSocket using the KISS protocol.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "sdr",
+    "kiss",
+    "websocket",
+    "hamradio"
+  ],
+  "author": "",
+  "license": "MIT"
+}

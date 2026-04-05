@@ -9,6 +9,7 @@ use crate::modulator::FskModulator;
 use clap::Parser;
 use sdr_pdu_utils::cat::CatServer;
 use sdr_pdu_utils::kiss_server::KissServer;
+use sdr_pdu_utils::kiss_ws_server::KissWsServer;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::mpsc;
@@ -23,6 +24,10 @@ struct Args {
     /// TCP port for the KISS server
     #[arg(long, default_value_t = 8001)]
     kiss_port: u16,
+
+    /// TCP port for the KISS WebSocket server
+    #[arg(long, default_value_t = 8002)]
+    kiss_ws_port: u16,
 
     /// TCP port for the CAT (rigctld) server
     #[arg(long, default_value_t = 4532)]
@@ -112,16 +117,21 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
-    let kiss_server = KissServer::new(tx);
+    let kiss_server = KissServer::new(tx.clone());
+    let kiss_ws_server = KissWsServer::new(tx);
     let cat_server = CatServer::new(freq);
 
     let kiss_addr = format!("{}:{}", args.listen, args.kiss_port);
+    let kiss_ws_addr = format!("{}:{}", args.listen, args.kiss_ws_port);
     let cat_addr = format!("{}:{}", args.listen, args.cat_port);
 
     tokio::select! {
         _ = engine.run() => {},
         res = kiss_server.run(&kiss_addr) => {
             if let Err(e) = res { anyhow::bail!("KISS server failed: {}", e); }
+        },
+        res = kiss_ws_server.run(&kiss_ws_addr) => {
+            if let Err(e) = res { anyhow::bail!("KISS WebSocket server failed: {}", e); }
         },
         res = cat_server.run(&cat_addr) => {
             if let Err(e) = res { anyhow::bail!("CAT server failed: {}", e); }
