@@ -1,0 +1,101 @@
+name: Rust CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nightly Rust
+      run: |
+        rustup toolchain install nightly --component rustfmt clippy
+        rustup default nightly
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+    - name: Run fmt
+      run: cargo fmt --all --check
+    - name: Run clippy
+    # Profiles for non-root packages are ignored, we allow this warning in CI for now
+    # as it's a workspace-level configuration issue.
+      run: cargo clippy --workspace --all-targets -- -D warnings
+    - name: Run tests
+      run: cargo test --workspace
+
+  build-hackrf:
+    needs: lint-and-test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            target: x86_64-unknown-linux-gnu
+            binary: hackrf-pdu-tx
+          - os: ubuntu-latest
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+            binary: hackrf-pdu-tx
+          - os: windows-latest
+            arch: amd64
+            target: x86_64-pc-windows-msvc
+            binary: hackrf-pdu-tx.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nightly Rust
+      run: |
+        rustup toolchain install nightly
+        rustup target add ${{ matrix.target }} --toolchain nightly
+        rustup default nightly
+    - name: Install Cross-Compiler (Linux ARM64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+    - name: Build hackrf-pdu-tx
+      env:
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      run: cargo build --release -p hackrf-pdu-tx --target ${{ matrix.target }}
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: hackrf-pdu-tx-${{ matrix.arch }}-${{ matrix.os }}
+        path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+  build-pluto:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nightly Rust
+      run: |
+        rustup toolchain install nightly
+        rustup target add arm-unknown-linux-gnueabihf --toolchain nightly
+        rustup default nightly
+    - name: Install Cross-Compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-linux-gnueabihf
+    - name: Download PlutoSDR Sysroot
+      run: |
+        wget https://github.com/analogdevicesinc/plutosdr-fw/releases/download/v0.30/sysroot-v0.30.tar.gz
+        mkdir sysroot
+        tar -xzvf sysroot-v0.30.tar.gz -C sysroot
+    - name: Build pluto-pdu-tx
+      run: |
+        # We need to provide the sysroot path to the Makefile
+        make release-pluto -C pluto-pdu-tx SYSROOT=${{ github.workspace }}/sysroot
+    - name: Upload Artifact (PlutoSDR ARM)
+      uses: actions/upload-artifact@v4
+      with:
+        name: pluto-pdu-tx-arm
+        path: target/arm-unknown-linux-gnueabihf/release/pluto-pdu-tx

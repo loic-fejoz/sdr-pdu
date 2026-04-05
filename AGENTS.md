@@ -12,4 +12,10 @@ Develop a set of utility tools to use SDR radios like plutosdr, hackrf, or MMDVM
 You must read individual `AGENTS.md` files to follow their own guidelines.
 
 ## Tech Stack
-- **Language:** Rust (Edition 2024)
+
+- **Language:** Rust (Nightly Edition 2024)
+
+## Development Principles
+
+- **Context Preservation:** NEVER remove technical comments explaining hardware workarounds, SIMD logic, or critical timing.
+- **Documentation Integrity:** When updating `README.md` or `agent_docs`, ensure that existing technical context, "human-centric" instructions (e.g., cross-compilation examples), and feature descriptions are preserved or refined. Never delete useful documentation to "clean up" unless it is factually incorrect.

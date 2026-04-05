@@ -20,5 +20,8 @@ sdr-pdu-utils = { path = "../sdr-pdu-utils" }
 # libiio and libad9361 bindings will be needed later, 
 # but for unit tests of KISS/CAT/NCO we can start without them or with stubs.
 
-[profile.release]
-panic = "abort"
+
+# This will be forced by the CI/CD. See Makefile
+# [profile.release]
+# panic = "abort"
+

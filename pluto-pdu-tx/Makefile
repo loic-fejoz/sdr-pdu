@@ -26,6 +26,7 @@ release-pluto:
 	PKG_CONFIG_ALLOW_CROSS=1 \
 	PKG_CONFIG_PATH=$(SYSROOT)/usr/lib/pkgconfig \
 	CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=$(CC) \
+	CARGO_PROFILE_RELEASE_PANIC=abort \
 	RUSTFLAGS="$(PLUTO_RUSTFLAGS)" \
 	$(CARGO) build --release --target $(TARGET)
 
@@ -33,6 +34,7 @@ check:
 	PKG_CONFIG_ALLOW_CROSS=1 \
 	PKG_CONFIG_PATH=$(SYSROOT)/usr/lib/pkgconfig \
 	CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=$(CC) \
+	CARGO_PROFILE_RELEASE_PANIC=abort \
 	RUSTFLAGS="$(PLUTO_RUSTFLAGS)" \
 	$(CARGO) check --target $(TARGET)
 
@@ -43,7 +45,7 @@ clean:
 	$(CARGO) clean
 
 push: release-pluto
-	scp -O ./target/arm-unknown-linux-gnueabihf/release/pluto-tx-2fsk root@192.168.2.1:/root/
+	scp -O ./target/$(TARGET)/release/pluto-pdu-tx root@192.168.2.1:/root/
 
 push-spino: push
 	scp -O spino.sh root@192.168.2.1:/root/
