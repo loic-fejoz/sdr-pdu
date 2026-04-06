@@ -67,9 +67,11 @@ async fn main() -> anyhow::Result<()> {
     let tx_bcast_rx = tx_broadcast.clone();
     let source_addr = args.source.clone();
     tokio::spawn(async move {
+        let mut backoff = 1;
         loop {
             match TcpStream::connect(&source_addr).await {
                 Ok(stream) => {
+                    backoff = 1; // Reset backoff on successful connection
                     info!("Connected to source TCP KISS (RX) at {}", source_addr);
                     let mut reader = FramedRead::new(stream, KissDecoder);
 
@@ -92,7 +94,8 @@ async fn main() -> anyhow::Result<()> {
                     error!("Failed to connect to source (RX) {}: {}", source_addr, e);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+            backoff = std::cmp::min(backoff * 2, 60);
             info!("Reconnecting to source (RX)...");
         }
     });
@@ -100,25 +103,57 @@ async fn main() -> anyhow::Result<()> {
     // --- Task 1b: Target TX (Frames TO the target/source) ---
     let target_addr = args.target.clone().unwrap_or(args.source.clone());
     tokio::spawn(async move {
+        let mut backoff = 1;
         loop {
             match TcpStream::connect(&target_addr).await {
                 Ok(stream) => {
+                    backoff = 1; // Reset backoff on successful connection
                     info!("Connected to target TCP KISS (TX) at {}", target_addr);
-                    let mut writer = FramedWrite::new(stream, KissEncoder);
+                    let (mut read_half, write_half) = stream.into_split();
+                    let mut writer = FramedWrite::new(write_half, KissEncoder);
+                    let mut buf = [0u8; 1];
 
-                    while let Some(frame) = rx_mpsc.recv().await {
-                        if let Err(e) = writer.send(frame).await {
-                            error!("Error writing to target (TX): {}", e);
-                            break;
+                    loop {
+                        tokio::select! {
+                            // Read from target to detect disconnection
+                            res = tokio::io::AsyncReadExt::read(&mut read_half, &mut buf) => {
+                                match res {
+                                    Ok(0) => {
+                                        warn!("Target (TX) disconnected (EOF)");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        error!("Target (TX) connection error: {}", e);
+                                        break;
+                                    }
+                                    _ => {} // Ignore read data, but keep loop going
+                                }
+                            }
+                            // Write frames to target
+                            frame_opt = rx_mpsc.recv() => {
+                                match frame_opt {
+                                    Some(frame) => {
+                                        if let Err(e) = writer.send(frame).await {
+                                            error!("Error writing to target (TX): {}", e);
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        warn!("rx_mpsc channel closed");
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
-                    warn!("Target (TX) disconnected");
+                    warn!("Target (TX) connection task ended");
                 }
                 Err(e) => {
                     error!("Failed to connect to target (TX) {}: {}", target_addr, e);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+            backoff = std::cmp::min(backoff * 2, 60);
             info!("Reconnecting to target (TX)...");
         }
     });

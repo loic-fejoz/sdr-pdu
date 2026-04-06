@@ -18,17 +18,28 @@ impl CatServer {
         info!("CAT server listening on {}", addr);
 
         loop {
-            let (mut socket, _) = listener.accept().await?;
+            let (mut socket, peer_addr) = match listener.accept().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Failed to accept CAT client connection: {}", e);
+                    continue;
+                }
+            };
+            info!("New CAT client connected: {}", peer_addr);
+
             let frequency = self.frequency.clone();
 
             tokio::spawn(async move {
                 let mut buf = [0u8; 128];
                 loop {
                     let n = match socket.read(&mut buf).await {
-                        Ok(0) => return,
+                        Ok(0) => {
+                            info!("CAT client {} disconnected.", peer_addr);
+                            return;
+                        }
                         Ok(n) => n,
                         Err(e) => {
-                            error!("CAT socket error: {}", e);
+                            error!("CAT client {} error: {}", peer_addr, e);
                             return;
                         }
                     };

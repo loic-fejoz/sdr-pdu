@@ -19,7 +19,15 @@ impl KissServer {
         info!("KISS server listening on {}", addr);
 
         loop {
-            let (socket, _) = listener.accept().await?;
+            let (socket, peer_addr) = match listener.accept().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Failed to accept KISS client connection: {}", e);
+                    continue;
+                }
+            };
+            info!("New KISS client connected: {}", peer_addr);
+
             let sender = self.sender.clone();
 
             tokio::spawn(async move {
@@ -46,11 +54,12 @@ impl KissServer {
                             }
                         }
                         Err(e) => {
-                            error!("KISS client error: {}", e);
+                            error!("KISS client {} error: {}", peer_addr, e);
                             return;
                         }
                     }
                 }
+                info!("KISS client {} disconnected.", peer_addr);
             });
         }
     }

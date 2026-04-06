@@ -22,7 +22,13 @@ impl KissWsServer {
         info!("KISS WebSocket server listening on ws://{}", addr);
 
         loop {
-            let (socket, peer) = listener.accept().await?;
+            let (socket, peer) = match listener.accept().await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("Failed to accept KISS WS client connection: {}", e);
+                    continue;
+                }
+            };
             let sender = self.sender.clone();
 
             tokio::spawn(async move {
