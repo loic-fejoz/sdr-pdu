@@ -105,8 +105,14 @@ async fn main() -> anyhow::Result<()> {
     let mut modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
 
     if args.scramble {
-        let poly = u32::from_str_radix(args.poly.trim_start_matches("0x"), 16)?;
-        let seed = u32::from_str_radix(args.seed.trim_start_matches("0x"), 16)?;
+        let poly = u32::from_str_radix(
+            args.poly.trim_start_matches("0x").trim_start_matches("0X"),
+            16,
+        )?;
+        let seed = u32::from_str_radix(
+            args.seed.trim_start_matches("0x").trim_start_matches("0X"),
+            16,
+        )?;
         modulator.set_scrambler(poly, seed);
     }
 

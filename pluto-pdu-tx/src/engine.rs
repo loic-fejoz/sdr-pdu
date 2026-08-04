@@ -31,7 +31,7 @@ impl<D: SdrDevice> TransmissionEngine<D> {
         info!("Transmission engine started");
 
         // Start in silenced state
-        if let Err(e) = self.device.disable_tx() {
+        if let Err(e) = self.device.disable_tx().await {
             error!("Failed to initially silence TX: {}", e);
         }
 
@@ -50,7 +50,7 @@ impl<D: SdrDevice> TransmissionEngine<D> {
                 total_samples
             );
 
-            if let Err(e) = self.device.set_frequency(freq) {
+            if let Err(e) = self.device.set_frequency(freq).await {
                 error!("Failed to set frequency: {}", e);
                 continue;
             }
@@ -59,15 +59,15 @@ impl<D: SdrDevice> TransmissionEngine<D> {
             full_iq.extend_from_slice(preamble_iq);
             full_iq.extend_from_slice(&frame_iq);
 
-            if let Err(e) = self.device.enable_tx() {
+            if let Err(e) = self.device.enable_tx().await {
                 error!("Failed to enable TX: {}", e);
             }
 
-            if let Err(e) = self.device.push_samples(&full_iq) {
+            if let Err(e) = self.device.push_samples(&full_iq).await {
                 error!("Failed to push samples: {}", e);
             }
 
-            if let Err(e) = self.device.disable_tx() {
+            if let Err(e) = self.device.disable_tx().await {
                 error!("Failed to silence TX after transmission: {}", e);
             }
         }

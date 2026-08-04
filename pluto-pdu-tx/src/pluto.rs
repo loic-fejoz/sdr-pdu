@@ -2,11 +2,11 @@ use industrial_io::*;
 use std::time::Duration;
 
 pub trait SdrDevice: Send {
-    fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()>;
-    fn push_samples(&mut self, samples: &[i16]) -> anyhow::Result<()>;
+    async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()>;
+    async fn push_samples(&mut self, samples: &[i16]) -> anyhow::Result<()>;
     fn get_actual_sample_rate(&self) -> u32;
-    fn enable_tx(&mut self) -> anyhow::Result<()>;
-    fn disable_tx(&mut self) -> anyhow::Result<()>;
+    async fn enable_tx(&mut self) -> anyhow::Result<()>;
+    async fn disable_tx(&mut self) -> anyhow::Result<()>;
 }
 
 pub struct PlutoDevice {
@@ -119,7 +119,7 @@ impl SdrDevice for PlutoDevice {
         self.actual_sample_rate
     }
 
-    fn enable_tx(&mut self) -> anyhow::Result<()> {
+    async fn enable_tx(&mut self) -> anyhow::Result<()> {
         let tx_phy_chan = self
             .phy
             .find_channel("voltage0", Direction::Output)
@@ -136,7 +136,7 @@ impl SdrDevice for PlutoDevice {
         Ok(())
     }
 
-    fn disable_tx(&mut self) -> anyhow::Result<()> {
+    async fn disable_tx(&mut self) -> anyhow::Result<()> {
         let tx_phy_chan = self
             .phy
             .find_channel("voltage0", Direction::Output)
@@ -150,7 +150,7 @@ impl SdrDevice for PlutoDevice {
         Ok(())
     }
 
-    fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {
+    async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {
         if freq == self.last_freq {
             return Ok(());
         }
@@ -186,7 +186,7 @@ impl SdrDevice for PlutoDevice {
         Ok(())
     }
 
-    fn push_samples(&mut self, samples: &[i16]) -> anyhow::Result<()> {
+    async fn push_samples(&mut self, samples: &[i16]) -> anyhow::Result<()> {
         let n_samples = samples.len() / 2;
         if n_samples == 0 {
             return Ok(());
@@ -226,7 +226,7 @@ impl SdrDevice for PlutoDevice {
             .push()
             .map_err(|e| anyhow::anyhow!("Failed to push samples to hardware: {}", e))?;
 
-        std::thread::sleep(Duration::from_millis(duration_ms + 10));
+        tokio::time::sleep(Duration::from_millis(duration_ms + 10)).await;
 
         Ok(())
     }
@@ -255,20 +255,20 @@ impl SdrDevice for MockDevice {
         1000000
     }
 
-    fn enable_tx(&mut self) -> anyhow::Result<()> {
+    async fn enable_tx(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn disable_tx(&mut self) -> anyhow::Result<()> {
+    async fn disable_tx(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {
+    async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()> {
         self.last_freq = freq;
         Ok(())
     }
 
-    fn push_samples(&mut self, _samples: &[i16]) -> anyhow::Result<()> {
+    async fn push_samples(&mut self, _samples: &[i16]) -> anyhow::Result<()> {
         Ok(())
     }
 }
