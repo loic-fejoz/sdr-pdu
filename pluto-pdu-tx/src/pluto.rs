@@ -3,6 +3,7 @@ use std::time::Duration;
 
 pub trait SdrDevice: Send {
     async fn set_frequency(&mut self, freq: u64) -> anyhow::Result<()>;
+    async fn set_attenuation(&mut self, attenuation: f64) -> anyhow::Result<()>;
     async fn push_samples(&mut self, samples: &[i16]) -> anyhow::Result<()>;
     fn get_actual_sample_rate(&self) -> u32;
     async fn enable_tx(&mut self) -> anyhow::Result<()>;
@@ -119,6 +120,16 @@ impl SdrDevice for PlutoDevice {
         self.actual_sample_rate
     }
 
+    async fn set_attenuation(&mut self, attenuation: f64) -> anyhow::Result<()> {
+        let atten_val = attenuation.abs();
+        if (self.attenuation - atten_val).abs() < 0.05 {
+            return Ok(());
+        }
+        self.attenuation = atten_val;
+        tracing::info!("TX attenuation updated to {} dB", self.attenuation);
+        Ok(())
+    }
+
     async fn enable_tx(&mut self) -> anyhow::Result<()> {
         let tx_phy_chan = self
             .phy
@@ -212,9 +223,9 @@ impl SdrDevice for PlutoDevice {
 
         let mut i_samples = Vec::with_capacity(n_samples);
         let mut q_samples = Vec::with_capacity(n_samples);
-        for chunk in samples.chunks_exact(2) {
-            i_samples.push(chunk[0]);
-            q_samples.push(chunk[1]);
+        for &[i, q] in samples.as_chunks::<2>().0 {
+            i_samples.push(i);
+            q_samples.push(q);
         }
 
         v0.write(&buffer, &i_samples)
@@ -253,6 +264,10 @@ impl MockDevice {
 impl SdrDevice for MockDevice {
     fn get_actual_sample_rate(&self) -> u32 {
         1000000
+    }
+
+    async fn set_attenuation(&mut self, _attenuation: f64) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn enable_tx(&mut self) -> anyhow::Result<()> {

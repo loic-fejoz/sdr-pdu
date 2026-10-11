@@ -1,4 +1,5 @@
 use crate::nco::TableNco;
+use sdr_pdu_utils::scrambler::Scrambler;
 
 pub struct FskModulator {
     nco: TableNco,
@@ -6,6 +7,8 @@ pub struct FskModulator {
     phase_inc_pos: u32,
     phase_inc_neg: u32,
     preamble_syncword_iq: Vec<i16>,
+    scrambler: Option<Scrambler>,
+    scrambler_seed: u32,
 }
 
 impl FskModulator {
@@ -19,7 +22,14 @@ impl FskModulator {
             phase_inc_pos,
             phase_inc_neg,
             preamble_syncword_iq: Vec::new(),
+            scrambler: None,
+            scrambler_seed: 0,
         }
+    }
+
+    pub fn set_scrambler(&mut self, poly: u32, seed: u32) {
+        self.scrambler = Some(Scrambler::new(poly, seed));
+        self.scrambler_seed = seed;
     }
 
     pub fn set_preamble_and_syncword(
@@ -37,7 +47,8 @@ impl FskModulator {
         }
         data.extend_from_slice(&syncword);
 
-        self.preamble_syncword_iq = self.modulate(&data);
+        // Modulate preamble and syncword without resetting scrambler state
+        self.preamble_syncword_iq = self.modulate_internal(&data, false);
         Ok(())
     }
 
@@ -46,6 +57,16 @@ impl FskModulator {
     }
 
     pub fn modulate(&mut self, data: &[u8]) -> Vec<i16> {
+        self.modulate_internal(data, true)
+    }
+
+    fn modulate_internal(&mut self, data: &[u8], reset_scrambler: bool) -> Vec<i16> {
+        if let Some(ref mut scr) = self.scrambler
+            && reset_scrambler
+        {
+            scr.reset(self.scrambler_seed);
+        }
+
         let total_bits = data.len() * 8;
         let total_samples_expected = (total_bits as f64 * self.samples_per_symbol).ceil() as usize;
         let mut buffer = Vec::with_capacity(total_samples_expected * 2);
@@ -56,7 +77,12 @@ impl FskModulator {
         let mut bit_counter = 1.0;
         for &byte in data {
             for bit_idx in 0..8 {
-                let bit = (byte >> (7 - bit_idx)) & 1;
+                let mut bit = (byte >> (7 - bit_idx)) & 1;
+
+                if let Some(ref mut scr) = self.scrambler {
+                    bit = scr.scramble_bit(bit);
+                }
+
                 let phase_inc = if bit == 1 {
                     self.phase_inc_pos
                 } else {
@@ -96,5 +122,19 @@ mod tests {
         // Ceil should give 834 or something similar depending on rounding
         assert!(samples.len() / 2 >= 833);
         assert!(samples.len() / 2 <= 835);
+    }
+
+    #[test]
+    fn test_modulator_g3ruh_scrambled() {
+        let mut mod_plain = FskModulator::new(1000000, 9600, 2400);
+        let mut mod_scrambled = FskModulator::new(1000000, 9600, 2400);
+        mod_scrambled.set_scrambler(Scrambler::G3RUH_POLY, Scrambler::G3RUH_SEED);
+
+        let data = vec![0x00, 0x00, 0x00, 0x00];
+        let plain_samples = mod_plain.modulate(&data);
+        let scr_samples = mod_scrambled.modulate(&data);
+
+        assert_eq!(plain_samples.len(), scr_samples.len());
+        assert_ne!(plain_samples, scr_samples);
     }
 }

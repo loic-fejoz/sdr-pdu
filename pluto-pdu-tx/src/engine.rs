@@ -9,6 +9,7 @@ pub struct TransmissionEngine<D: SdrDevice> {
     device: D,
     modulator: FskModulator,
     freq_shared: Arc<AtomicU64>,
+    att_shared: Arc<AtomicU64>,
     receiver: mpsc::Receiver<Vec<u8>>,
 }
 
@@ -17,12 +18,14 @@ impl<D: SdrDevice> TransmissionEngine<D> {
         device: D,
         modulator: FskModulator,
         freq_shared: Arc<AtomicU64>,
+        att_shared: Arc<AtomicU64>,
         receiver: mpsc::Receiver<Vec<u8>>,
     ) -> Self {
         Self {
             device,
             modulator,
             freq_shared,
+            att_shared,
             receiver,
         }
     }
@@ -37,6 +40,12 @@ impl<D: SdrDevice> TransmissionEngine<D> {
 
         while let Some(frame) = self.receiver.recv().await {
             let freq = self.freq_shared.load(Ordering::SeqCst);
+            let att_tenths = self.att_shared.load(Ordering::SeqCst);
+            let att_db = att_tenths as f64 / 10.0;
+
+            if let Err(e) = self.device.set_attenuation(att_db).await {
+                error!("Failed to update attenuation: {}", e);
+            }
 
             // Modulate first
             let frame_iq = self.modulator.modulate(&frame);
@@ -44,9 +53,10 @@ impl<D: SdrDevice> TransmissionEngine<D> {
             let total_samples = (preamble_iq.len() + frame_iq.len()) / 2;
 
             info!(
-                "Transmitting frame (len={}) at {} Hz. Samples: {}",
+                "Transmitting frame (len={}) at {} Hz, attenuation {:.1} dB. Samples: {}",
                 frame.len(),
                 freq,
+                att_db,
                 total_samples
             );
 
@@ -90,7 +100,13 @@ mod tests {
             .set_preamble_and_syncword("0x55", 8, "0x7E")
             .unwrap();
 
-        let engine = TransmissionEngine::new(device, modulat, freq.clone(), rx);
+        let engine = TransmissionEngine::new(
+            device,
+            modulat,
+            freq.clone(),
+            Arc::new(AtomicU64::new(100)),
+            rx,
+        );
 
         tx.send(vec![0xAA]).await.unwrap();
         drop(tx); // Close channel to terminate run loop

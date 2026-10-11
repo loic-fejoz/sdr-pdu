@@ -74,6 +74,10 @@ struct Args {
     /// Syncword (e.g., 0x1ACFFC1D)
     #[arg(long, default_value = "0x7E")]
     syncword: String,
+
+    /// Enable G3RUH-style scrambling
+    #[arg(long, default_value_t = false)]
+    g3ruh: bool,
 }
 
 #[tokio::main]
@@ -83,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel(100);
     let freq = Arc::new(AtomicU64::new(args.frequency));
+    let attenuation_tenths = (args.attenuation.abs() * 10.0).round() as u64;
+    let att = Arc::new(AtomicU64::new(attenuation_tenths));
 
     // Initialize Pluto
     let device = PlutoDevice::new(
@@ -97,16 +103,23 @@ async fn main() -> anyhow::Result<()> {
     let actual_sample_rate = device.get_actual_sample_rate();
     let mut modulator = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
 
+    if args.g3ruh {
+        modulator.set_scrambler(
+            sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
+            sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
+        );
+    }
+
     modulator.set_preamble_and_syncword(
         &args.preamble,
         args.preamble_repetition,
         &args.syncword,
     )?;
 
-    let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
+    let engine = TransmissionEngine::new(device, modulator, freq.clone(), att.clone(), rx);
     let kiss_server = KissServer::new(tx.clone());
     let kiss_ws_server = KissWsServer::new(tx);
-    let cat_server = CatServer::new(freq);
+    let cat_server = CatServer::new(freq).with_attenuation(att);
 
     let kiss_addr = format!("{}:{}", args.listen, args.kiss_port);
     let kiss_ws_addr = format!("{}:{}", args.listen, args.kiss_ws_port);
