@@ -78,6 +78,14 @@ struct Args {
     /// Enable G3RUH-style scrambling
     #[arg(long, default_value_t = false)]
     g3ruh: bool,
+
+    /// Enable QPSK modulation
+    #[arg(long, default_value_t = false)]
+    qpsk: bool,
+
+    /// Enable Offset QPSK (OQPSK) modulation
+    #[arg(long, default_value_t = false)]
+    oqpsk: bool,
 }
 
 #[tokio::main]
@@ -101,20 +109,38 @@ async fn main() -> anyhow::Result<()> {
 
     // Read back actual sample rate if possible to ensure NCO is correct
     let actual_sample_rate = device.get_actual_sample_rate();
-    let mut modulator = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
 
-    if args.g3ruh {
-        modulator.set_scrambler(
-            sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
-            sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
-        );
-    }
-
-    modulator.set_preamble_and_syncword(
-        &args.preamble,
-        args.preamble_repetition,
-        &args.syncword,
-    )?;
+    let modulator = if args.qpsk || args.oqpsk {
+        let is_oqpsk = args.oqpsk;
+        let mut qpsk_mod =
+            sdr_pdu_utils::qpsk::QpskModulator::new(actual_sample_rate, args.baud_rate, is_oqpsk);
+        if args.g3ruh {
+            qpsk_mod.set_scrambler(
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
+            );
+        }
+        qpsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Qpsk(qpsk_mod)
+    } else {
+        let mut fsk_mod = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
+        if args.g3ruh {
+            fsk_mod.set_scrambler(
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
+            );
+        }
+        fsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Fsk(fsk_mod)
+    };
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), att.clone(), rx);
     let kiss_server = KissServer::new(tx.clone());

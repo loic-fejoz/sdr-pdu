@@ -108,6 +108,27 @@ impl FskModulator {
     }
 }
 
+pub enum Modulator {
+    Fsk(FskModulator),
+    Qpsk(sdr_pdu_utils::qpsk::QpskModulator),
+}
+
+impl Modulator {
+    pub fn modulate(&mut self, data: &[u8]) -> Vec<i16> {
+        match self {
+            Modulator::Fsk(m) => m.modulate(data),
+            Modulator::Qpsk(m) => m.modulate_i16(data),
+        }
+    }
+
+    pub fn get_preamble_syncword_iq(&self) -> &[i16] {
+        match self {
+            Modulator::Fsk(m) => m.get_preamble_syncword_iq(),
+            Modulator::Qpsk(m) => m.get_preamble_syncword_iq_i16(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +157,21 @@ mod tests {
 
         assert_eq!(plain_samples.len(), scr_samples.len());
         assert_ne!(plain_samples, scr_samples);
+    }
+
+    #[test]
+    fn test_modulator_enum_qpsk_and_oqpsk() {
+        let mut qpsk = sdr_pdu_utils::qpsk::QpskModulator::new(1000000, 100000, false);
+        qpsk.set_preamble_and_syncword("0x55", 2, "0x7E").unwrap();
+        let mut mod_qpsk = Modulator::Qpsk(qpsk);
+        let samples = mod_qpsk.modulate(&[0x12, 0x34]);
+        assert!(!samples.is_empty());
+        assert!(!mod_qpsk.get_preamble_syncword_iq().is_empty());
+
+        let mut oqpsk = sdr_pdu_utils::qpsk::QpskModulator::new(1000000, 100000, true);
+        oqpsk.set_preamble_and_syncword("0x55", 2, "0x7E").unwrap();
+        let mut mod_oqpsk = Modulator::Qpsk(oqpsk);
+        let samples_oqpsk = mod_oqpsk.modulate(&[0x12, 0x34]);
+        assert!(!samples_oqpsk.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 use crate::hackrf::SdrDevice;
-use crate::modulator::FskModulator;
+use crate::modulator::Modulator;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 pub struct TransmissionEngine<D: SdrDevice> {
     device: D,
-    modulator: FskModulator,
+    modulator: Modulator,
     freq_shared: Arc<AtomicU64>,
     receiver: mpsc::Receiver<Vec<u8>>,
 }
@@ -15,7 +15,7 @@ pub struct TransmissionEngine<D: SdrDevice> {
 impl<D: SdrDevice> TransmissionEngine<D> {
     pub fn new(
         device: D,
-        modulator: FskModulator,
+        modulator: Modulator,
         freq_shared: Arc<AtomicU64>,
         receiver: mpsc::Receiver<Vec<u8>>,
     ) -> Self {

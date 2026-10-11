@@ -77,6 +77,14 @@ struct Args {
     #[arg(long, default_value_t = false)]
     scramble: bool,
 
+    /// Enable QPSK modulation
+    #[arg(long, default_value_t = false)]
+    qpsk: bool,
+
+    /// Enable Offset QPSK (OQPSK) modulation
+    #[arg(long, default_value_t = false)]
+    oqpsk: bool,
+
     /// Scrambler polynomial (hex bitmask). Default G3RUH: x^17 + x^12 + 1 -> bit 16 and 11 set -> 0x21000 (shifted by 1 for multiplicative logic)
     /// Actually standard G3RUH bits are 12 and 17.
     /// If we use 0-indexed: bits 11 and 16.
@@ -102,9 +110,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("HackRF init failed: {}", e))?;
 
-    let mut modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
-
-    if args.scramble {
+    let scrambler_config = if args.scramble {
         let poly = u32::from_str_radix(
             args.poly.trim_start_matches("0x").trim_start_matches("0X"),
             16,
@@ -113,14 +119,36 @@ async fn main() -> anyhow::Result<()> {
             args.seed.trim_start_matches("0x").trim_start_matches("0X"),
             16,
         )?;
-        modulator.set_scrambler(poly, seed);
-    }
+        Some((poly, seed))
+    } else {
+        None
+    };
 
-    modulator.set_preamble_and_syncword(
-        &args.preamble,
-        args.preamble_repetition,
-        &args.syncword,
-    )?;
+    let modulator = if args.qpsk || args.oqpsk {
+        let is_oqpsk = args.oqpsk;
+        let mut qpsk_mod =
+            sdr_pdu_utils::qpsk::QpskModulator::new(args.sample_rate, args.baud_rate, is_oqpsk);
+        if let Some((poly, seed)) = scrambler_config {
+            qpsk_mod.set_scrambler(poly, seed);
+        }
+        qpsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Qpsk(qpsk_mod)
+    } else {
+        let mut fsk_mod = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
+        if let Some((poly, seed)) = scrambler_config {
+            fsk_mod.set_scrambler(poly, seed);
+        }
+        fsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Fsk(fsk_mod)
+    };
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
     let kiss_server = KissServer::new(tx.clone());

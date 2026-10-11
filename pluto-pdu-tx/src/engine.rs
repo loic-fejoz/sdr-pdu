@@ -1,4 +1,4 @@
-use crate::modulator::FskModulator;
+use crate::modulator::Modulator;
 use crate::pluto::SdrDevice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 pub struct TransmissionEngine<D: SdrDevice> {
     device: D,
-    modulator: FskModulator,
+    modulator: Modulator,
     freq_shared: Arc<AtomicU64>,
     att_shared: Arc<AtomicU64>,
     receiver: mpsc::Receiver<Vec<u8>>,
@@ -16,7 +16,7 @@ pub struct TransmissionEngine<D: SdrDevice> {
 impl<D: SdrDevice> TransmissionEngine<D> {
     pub fn new(
         device: D,
-        modulator: FskModulator,
+        modulator: Modulator,
         freq_shared: Arc<AtomicU64>,
         att_shared: Arc<AtomicU64>,
         receiver: mpsc::Receiver<Vec<u8>>,
@@ -102,7 +102,7 @@ mod tests {
 
         let engine = TransmissionEngine::new(
             device,
-            modulat,
+            Modulator::Fsk(modulat),
             freq.clone(),
             Arc::new(AtomicU64::new(100)),
             rx,
