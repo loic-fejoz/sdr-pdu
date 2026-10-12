@@ -1,3 +1,4 @@
+use crate::rrc::RrcFilter;
 use crate::scrambler::Scrambler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,6 +18,7 @@ pub struct QpskModulator {
     scrambler_seed: u32,
     amplitude_i16: i16,
     amplitude_i8: i8,
+    rrc_filter: Option<RrcFilter>,
 }
 
 impl QpskModulator {
@@ -30,7 +32,22 @@ impl QpskModulator {
             scrambler_seed: 0,
             amplitude_i16: 23170, // ~32767 / sqrt(2)
             amplitude_i8: 90,     // ~127 / sqrt(2)
+            rrc_filter: None,
         }
+    }
+
+    /// Enable Root Raised Cosine (RRC) pulse shaping.
+    ///
+    /// * `alpha`: Roll-off factor (e.g. 0.35, 0.5)
+    /// * `span`: Filter span in symbols (e.g. 6 to 10 symbols)
+    pub fn set_rrc_filter(&mut self, alpha: f64, span: usize) {
+        let sps = self.samples_per_symbol.round() as usize;
+        let rrc = RrcFilter::new(alpha, sps.max(1), span);
+        self.rrc_filter = Some(rrc);
+    }
+
+    pub fn rrc_filter(&self) -> Option<&RrcFilter> {
+        self.rrc_filter.as_ref()
     }
 
     pub fn set_scrambler(&mut self, poly: u32, seed: u32) {
@@ -97,104 +114,208 @@ impl QpskModulator {
     fn modulate_i16_internal(&mut self, data: &[u8], reset_scrambler: bool) -> Vec<i16> {
         let bits = self.extract_bits(data, reset_scrambler);
         let num_symbols = bits.len().div_ceil(2);
-        let total_samples = (num_symbols as f64 * self.samples_per_symbol).ceil() as usize;
-
-        // In OQPSK, Q is delayed by half a symbol: samples_per_symbol / 2.0
-        let q_delay_samples = if self.oqpsk {
-            (self.samples_per_symbol * 0.5).round() as usize
-        } else {
-            0
-        };
-
-        let buffer_samples = total_samples + q_delay_samples;
-        let mut i_waveform = vec![0i16; buffer_samples];
-        let mut q_waveform = vec![0i16; buffer_samples];
-
         let amp = self.amplitude_i16;
 
-        for (sym_idx, chunk) in bits.chunks(2).enumerate() {
-            let b0 = chunk[0];
-            let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+        if let Some(ref rrc) = self.rrc_filter {
+            let sps = rrc.sps();
+            let mut symbols_i = Vec::with_capacity(num_symbols);
+            let mut symbols_q = Vec::with_capacity(num_symbols);
 
-            // Gray-coded mapping:
-            // bit 0 -> I (+amp for 0, -amp for 1)
-            // bit 1 -> Q (+amp for 0, -amp for 1)
-            let i_val = if b0 == 0 { amp } else { -amp };
-            let q_val = if b1 == 0 { amp } else { -amp };
-
-            let start_sample_i = (sym_idx as f64 * self.samples_per_symbol).floor() as usize;
-            let end_sample_i = ((sym_idx + 1) as f64 * self.samples_per_symbol).floor() as usize;
-            let slice_end_i = std::cmp::min(end_sample_i, buffer_samples);
-
-            if start_sample_i < slice_end_i {
-                i_waveform[start_sample_i..slice_end_i].fill(i_val);
+            for chunk in bits.chunks(2) {
+                let b0 = chunk[0];
+                let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+                let i_sym = if b0 == 0 { amp as f64 } else { -(amp as f64) };
+                let q_sym = if b1 == 0 { amp as f64 } else { -(amp as f64) };
+                symbols_i.push(i_sym);
+                symbols_q.push(q_sym);
             }
 
-            let start_sample_q = start_sample_i + q_delay_samples;
-            let end_sample_q = end_sample_i + q_delay_samples;
-            let slice_end_q = std::cmp::min(end_sample_q, buffer_samples);
+            let filtered_i = rrc.shape_symbols(&symbols_i);
+            let filtered_q = rrc.shape_symbols(&symbols_q);
 
-            if start_sample_q < slice_end_q {
-                q_waveform[start_sample_q..slice_end_q].fill(q_val);
+            let q_delay_samples = if self.oqpsk {
+                (sps as f64 * 0.5).round() as usize
+            } else {
+                0
+            };
+
+            let total_samples = filtered_i.len() + q_delay_samples;
+            let mut iq = Vec::with_capacity(total_samples * 2);
+
+            for idx in 0..total_samples {
+                let sample_i = if idx < filtered_i.len() {
+                    filtered_i[idx]
+                        .clamp(i16::MIN as f64, i16::MAX as f64)
+                        .round() as i16
+                } else {
+                    0
+                };
+
+                let sample_q =
+                    if idx >= q_delay_samples && (idx - q_delay_samples) < filtered_q.len() {
+                        filtered_q[idx - q_delay_samples]
+                            .clamp(i16::MIN as f64, i16::MAX as f64)
+                            .round() as i16
+                    } else {
+                        0
+                    };
+
+                iq.push(sample_i);
+                iq.push(sample_q);
             }
-        }
 
-        // Interleave I and Q
-        let mut iq = Vec::with_capacity(buffer_samples * 2);
-        for s in 0..buffer_samples {
-            iq.push(i_waveform[s]);
-            iq.push(q_waveform[s]);
+            iq
+        } else {
+            let total_samples = (num_symbols as f64 * self.samples_per_symbol).ceil() as usize;
+
+            // In OQPSK, Q is delayed by half a symbol: samples_per_symbol / 2.0
+            let q_delay_samples = if self.oqpsk {
+                (self.samples_per_symbol * 0.5).round() as usize
+            } else {
+                0
+            };
+
+            let buffer_samples = total_samples + q_delay_samples;
+            let mut i_waveform = vec![0i16; buffer_samples];
+            let mut q_waveform = vec![0i16; buffer_samples];
+
+            for (sym_idx, chunk) in bits.chunks(2).enumerate() {
+                let b0 = chunk[0];
+                let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+
+                // Gray-coded mapping:
+                // bit 0 -> I (+amp for 0, -amp for 1)
+                // bit 1 -> Q (+amp for 0, -amp for 1)
+                let i_val = if b0 == 0 { amp } else { -amp };
+                let q_val = if b1 == 0 { amp } else { -amp };
+
+                let start_sample_i = (sym_idx as f64 * self.samples_per_symbol).floor() as usize;
+                let end_sample_i =
+                    ((sym_idx + 1) as f64 * self.samples_per_symbol).floor() as usize;
+                let slice_end_i = std::cmp::min(end_sample_i, buffer_samples);
+
+                if start_sample_i < slice_end_i {
+                    i_waveform[start_sample_i..slice_end_i].fill(i_val);
+                }
+
+                let start_sample_q = start_sample_i + q_delay_samples;
+                let end_sample_q = end_sample_i + q_delay_samples;
+                let slice_end_q = std::cmp::min(end_sample_q, buffer_samples);
+
+                if start_sample_q < slice_end_q {
+                    q_waveform[start_sample_q..slice_end_q].fill(q_val);
+                }
+            }
+
+            // Interleave I and Q
+            let mut iq = Vec::with_capacity(buffer_samples * 2);
+            for s in 0..buffer_samples {
+                iq.push(i_waveform[s]);
+                iq.push(q_waveform[s]);
+            }
+            iq
         }
-        iq
     }
 
     fn modulate_i8_internal(&mut self, data: &[u8], reset_scrambler: bool) -> Vec<i8> {
         let bits = self.extract_bits(data, reset_scrambler);
         let num_symbols = bits.len().div_ceil(2);
-        let total_samples = (num_symbols as f64 * self.samples_per_symbol).ceil() as usize;
-
-        let q_delay_samples = if self.oqpsk {
-            (self.samples_per_symbol * 0.5).round() as usize
-        } else {
-            0
-        };
-
-        let buffer_samples = total_samples + q_delay_samples;
-        let mut i_waveform = vec![0i8; buffer_samples];
-        let mut q_waveform = vec![0i8; buffer_samples];
-
         let amp = self.amplitude_i8;
 
-        for (sym_idx, chunk) in bits.chunks(2).enumerate() {
-            let b0 = chunk[0];
-            let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+        if let Some(ref rrc) = self.rrc_filter {
+            let sps = rrc.sps();
+            let mut symbols_i = Vec::with_capacity(num_symbols);
+            let mut symbols_q = Vec::with_capacity(num_symbols);
 
-            let i_val = if b0 == 0 { amp } else { -amp };
-            let q_val = if b1 == 0 { amp } else { -amp };
-
-            let start_sample_i = (sym_idx as f64 * self.samples_per_symbol).floor() as usize;
-            let end_sample_i = ((sym_idx + 1) as f64 * self.samples_per_symbol).floor() as usize;
-            let slice_end_i = std::cmp::min(end_sample_i, buffer_samples);
-
-            if start_sample_i < slice_end_i {
-                i_waveform[start_sample_i..slice_end_i].fill(i_val);
+            for chunk in bits.chunks(2) {
+                let b0 = chunk[0];
+                let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+                let i_sym = if b0 == 0 { amp as f64 } else { -(amp as f64) };
+                let q_sym = if b1 == 0 { amp as f64 } else { -(amp as f64) };
+                symbols_i.push(i_sym);
+                symbols_q.push(q_sym);
             }
 
-            let start_sample_q = start_sample_i + q_delay_samples;
-            let end_sample_q = end_sample_i + q_delay_samples;
-            let slice_end_q = std::cmp::min(end_sample_q, buffer_samples);
+            let filtered_i = rrc.shape_symbols(&symbols_i);
+            let filtered_q = rrc.shape_symbols(&symbols_q);
 
-            if start_sample_q < slice_end_q {
-                q_waveform[start_sample_q..slice_end_q].fill(q_val);
+            let q_delay_samples = if self.oqpsk {
+                (sps as f64 * 0.5).round() as usize
+            } else {
+                0
+            };
+
+            let total_samples = filtered_i.len() + q_delay_samples;
+            let mut iq = Vec::with_capacity(total_samples * 2);
+
+            for idx in 0..total_samples {
+                let sample_i = if idx < filtered_i.len() {
+                    filtered_i[idx]
+                        .clamp(i8::MIN as f64, i8::MAX as f64)
+                        .round() as i8
+                } else {
+                    0
+                };
+
+                let sample_q =
+                    if idx >= q_delay_samples && (idx - q_delay_samples) < filtered_q.len() {
+                        filtered_q[idx - q_delay_samples]
+                            .clamp(i8::MIN as f64, i8::MAX as f64)
+                            .round() as i8
+                    } else {
+                        0
+                    };
+
+                iq.push(sample_i);
+                iq.push(sample_q);
             }
-        }
 
-        let mut iq = Vec::with_capacity(buffer_samples * 2);
-        for s in 0..buffer_samples {
-            iq.push(i_waveform[s]);
-            iq.push(q_waveform[s]);
+            iq
+        } else {
+            let total_samples = (num_symbols as f64 * self.samples_per_symbol).ceil() as usize;
+
+            let q_delay_samples = if self.oqpsk {
+                (self.samples_per_symbol * 0.5).round() as usize
+            } else {
+                0
+            };
+
+            let buffer_samples = total_samples + q_delay_samples;
+            let mut i_waveform = vec![0i8; buffer_samples];
+            let mut q_waveform = vec![0i8; buffer_samples];
+
+            for (sym_idx, chunk) in bits.chunks(2).enumerate() {
+                let b0 = chunk[0];
+                let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+
+                let i_val = if b0 == 0 { amp } else { -amp };
+                let q_val = if b1 == 0 { amp } else { -amp };
+
+                let start_sample_i = (sym_idx as f64 * self.samples_per_symbol).floor() as usize;
+                let end_sample_i =
+                    ((sym_idx + 1) as f64 * self.samples_per_symbol).floor() as usize;
+                let slice_end_i = std::cmp::min(end_sample_i, buffer_samples);
+
+                if start_sample_i < slice_end_i {
+                    i_waveform[start_sample_i..slice_end_i].fill(i_val);
+                }
+
+                let start_sample_q = start_sample_i + q_delay_samples;
+                let end_sample_q = end_sample_i + q_delay_samples;
+                let slice_end_q = std::cmp::min(end_sample_q, buffer_samples);
+
+                if start_sample_q < slice_end_q {
+                    q_waveform[start_sample_q..slice_end_q].fill(q_val);
+                }
+            }
+
+            let mut iq = Vec::with_capacity(buffer_samples * 2);
+            for s in 0..buffer_samples {
+                iq.push(i_waveform[s]);
+                iq.push(q_waveform[s]);
+            }
+            iq
         }
-        iq
     }
 }
 
@@ -249,5 +370,30 @@ mod tests {
 
         assert_eq!(plain.len(), scr.len());
         assert_ne!(plain, scr);
+    }
+
+    #[test]
+    fn test_qpsk_rrc_modulation() {
+        let mut modulat = QpskModulator::new(1000000, 100000, false);
+        modulat.set_rrc_filter(0.35, 6);
+        let data = vec![0xAA, 0x55];
+        let samples_i16 = modulat.modulate_i16(&data);
+        let samples_i8 = modulat.modulate_i8(&data);
+
+        // 2 bytes = 16 bits = 8 symbols.
+        // sps = 10, span = 6 -> ntaps = 61.
+        // total samples = 8 * 10 + 61 - 1 = 140 samples -> 280 interleaved values
+        assert_eq!(samples_i16.len(), 280);
+        assert_eq!(samples_i8.len(), 280);
+
+        // Ensure non-trivial pulse shape (not just flat constants)
+        let mut unique_values_i16 = std::collections::HashSet::new();
+        for &val in &samples_i16 {
+            unique_values_i16.insert(val);
+        }
+        assert!(
+            unique_values_i16.len() > 10,
+            "RRC shaping should produce varied analog levels"
+        );
     }
 }

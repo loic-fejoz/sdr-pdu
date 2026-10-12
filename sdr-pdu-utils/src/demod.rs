@@ -229,6 +229,88 @@ impl SignalDemodulator {
 
         bytes
     }
+
+    /// Demodulate QPSK / OQPSK baseband samples with an RRC matched filter.
+    ///
+    /// * `samples`: Interleaved I/Q samples (e.g. `[i0, q0, i1, q1, ...]`)
+    /// * `sample_rate`: Sample rate in Hz
+    /// * `baud_rate`: Baud rate in symbols/sec
+    /// * `oqpsk`: If true, applies half-symbol Q delay compensation
+    /// * `alpha`: RRC roll-off factor
+    /// * `span`: RRC filter span in symbols
+    pub fn demodulate_qpsk_rrc(
+        samples: &[i16],
+        sample_rate: u32,
+        baud_rate: u32,
+        oqpsk: bool,
+        alpha: f64,
+        span: usize,
+    ) -> Vec<u8> {
+        let n_samples = samples.len() / 2;
+        let sps = ((sample_rate as f64) / (baud_rate as f64)).round() as usize;
+        let rrc = crate::rrc::RrcFilter::new(alpha, sps, span);
+
+        let mut in_i = Vec::with_capacity(n_samples);
+        let mut in_q = Vec::with_capacity(n_samples);
+        for s in 0..n_samples {
+            in_i.push(samples[s * 2] as f64);
+            in_q.push(samples[s * 2 + 1] as f64);
+        }
+
+        // Apply RX matched RRC filter (RRC * RRC = RC)
+        let mf_i = rrc.convolve(&in_i);
+        let mf_q = rrc.convolve(&in_q);
+
+        // Group delay of TX + RX RRC filters = span * sps samples total
+        // TX delay = span * sps / 2
+        // RX delay = span * sps / 2
+        // Total delay to symbol eye-opening = span * sps
+        let total_delay = span * sps;
+        let q_delay_samples = if oqpsk {
+            (sps as f64 * 0.5).round() as usize
+        } else {
+            0
+        };
+
+        // The TX signal had `total_tx_samples = num_symbols * sps + filter_span_samples + q_delay_samples`.
+        // So `num_symbols = (n_samples.saturating_sub(filter_span_samples + q_delay_samples)) / sps`.
+        let filter_span_samples = span * sps;
+        let total_symbols = (n_samples.saturating_sub(filter_span_samples + q_delay_samples)) / sps;
+        let mut bits = Vec::with_capacity(total_symbols * 2);
+
+        for sym_idx in 0..total_symbols {
+            let sample_idx_i = total_delay + sym_idx * sps;
+            let sample_idx_q = total_delay + sym_idx * sps + q_delay_samples;
+
+            let val_i = if sample_idx_i < mf_i.len() {
+                mf_i[sample_idx_i]
+            } else {
+                0.0
+            };
+            let val_q = if sample_idx_q < mf_q.len() {
+                mf_q[sample_idx_q]
+            } else {
+                0.0
+            };
+
+            let b0 = if val_i >= 0.0 { 0u8 } else { 1u8 };
+            let b1 = if val_q >= 0.0 { 0u8 } else { 1u8 };
+
+            bits.push(b0);
+            bits.push(b1);
+        }
+
+        let mut bytes = Vec::with_capacity(bits.len() / 8);
+        for byte_bits in bits.as_chunks::<8>().0 {
+            let mut byte = 0u8;
+            for (idx, &b) in byte_bits.iter().enumerate() {
+                byte |= b << (7 - idx);
+            }
+            bytes.push(byte);
+        }
+
+        bytes
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +441,95 @@ mod tests {
 
         let decoded =
             SignalDemodulator::demodulate_qpsk(&noisy_samples, sample_rate, baud_rate, true);
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_qpsk_rrc_loopback_clean() {
+        let sample_rate = 1_000_000;
+        let baud_rate = 50_000; // 20 sps
+        let alpha = 0.35;
+        let span = 8;
+
+        let mut modulat = QpskModulator::new(sample_rate, baud_rate, false);
+        modulat.set_rrc_filter(alpha, span);
+
+        let data = vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
+        let samples = modulat.modulate_i16(&data);
+
+        let decoded = SignalDemodulator::demodulate_qpsk_rrc(
+            &samples,
+            sample_rate,
+            baud_rate,
+            false,
+            alpha,
+            span,
+        );
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_oqpsk_rrc_loopback_clean() {
+        let sample_rate = 1_000_000;
+        let baud_rate = 50_000;
+        let alpha = 0.5;
+        let span = 6;
+
+        let mut modulat = QpskModulator::new(sample_rate, baud_rate, true);
+        modulat.set_rrc_filter(alpha, span);
+
+        let data = vec![0xAA, 0x55, 0xC3, 0x3C, 0x0F, 0xF0];
+        let samples = modulat.modulate_i16(&data);
+
+        let decoded = SignalDemodulator::demodulate_qpsk_rrc(
+            &samples,
+            sample_rate,
+            baud_rate,
+            true,
+            alpha,
+            span,
+        );
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_qpsk_rrc_loopback_awgn() {
+        let sample_rate = 1_000_000;
+        let baud_rate = 50_000;
+        let alpha = 0.35;
+        let span = 8;
+
+        let mut modulat = QpskModulator::new(sample_rate, baud_rate, false);
+        modulat.set_rrc_filter(alpha, span);
+
+        let data = vec![0x42, 0x13, 0x37, 0xFE, 0xED];
+        let samples = modulat.modulate_i16(&data);
+
+        let n_samples = samples.len() / 2;
+        let mut sig_i = Vec::with_capacity(n_samples);
+        let mut sig_q = Vec::with_capacity(n_samples);
+        for &[i, q] in samples.as_chunks::<2>().0 {
+            sig_i.push(i as f64);
+            sig_q.push(q as f64);
+        }
+
+        let mut channel = ChannelSimulator::new(999);
+        let (noisy_i, noisy_q) = channel.apply_channel(&sig_i, &sig_q, 15.0, 0.0, 0.0);
+
+        let mut noisy_samples = Vec::with_capacity(n_samples * 2);
+        for k in 0..n_samples {
+            noisy_samples.push(noisy_i[k].round().clamp(-32768.0, 32767.0) as i16);
+            noisy_samples.push(noisy_q[k].round().clamp(-32768.0, 32767.0) as i16);
+        }
+
+        let decoded = SignalDemodulator::demodulate_qpsk_rrc(
+            &noisy_samples,
+            sample_rate,
+            baud_rate,
+            false,
+            alpha,
+            span,
+        );
         assert_eq!(decoded, data);
     }
 }

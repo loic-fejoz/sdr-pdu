@@ -86,6 +86,14 @@ struct Args {
     /// Enable Offset QPSK (OQPSK) modulation
     #[arg(long, default_value_t = false)]
     oqpsk: bool,
+
+    /// Enable Root Raised Cosine (RRC) pulse shaping filter
+    #[arg(long, default_value_t = false)]
+    rrc: bool,
+
+    /// Roll-off factor alpha for RRC filter (e.g. 0.35, 0.5)
+    #[arg(long, default_value_t = 0.35)]
+    rrc_alpha: f64,
 }
 
 #[tokio::main]
@@ -114,6 +122,9 @@ async fn main() -> anyhow::Result<()> {
         let is_oqpsk = args.oqpsk;
         let mut qpsk_mod =
             sdr_pdu_utils::qpsk::QpskModulator::new(actual_sample_rate, args.baud_rate, is_oqpsk);
+        if args.rrc {
+            qpsk_mod.set_rrc_filter(args.rrc_alpha, 8);
+        }
         if args.g3ruh {
             qpsk_mod.set_scrambler(
                 sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
