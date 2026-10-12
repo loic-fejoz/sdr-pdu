@@ -20,10 +20,15 @@ pub fn parse_hex_bytes(s: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 pub fn parse_hex_bytes_even(s: &str) -> anyhow::Result<Vec<u8>> {
-    let mut res = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        let byte = u8::from_str_radix(&s[i..i + 2], 16)
-            .map_err(|e| anyhow::anyhow!("Hex parse error at {}: {}", &s[i..i + 2], e))?;
+    if !s.is_ascii() {
+        anyhow::bail!("Hex string contains non-ASCII characters");
+    }
+    let bytes = s.as_bytes();
+    let mut res = Vec::with_capacity(bytes.len() / 2);
+    for i in (0..bytes.len()).step_by(2) {
+        let chunk = std::str::from_utf8(&bytes[i..i + 2])?;
+        let byte = u8::from_str_radix(chunk, 16)
+            .map_err(|e| anyhow::anyhow!("Hex parse error at {}: {}", chunk, e))?;
         res.push(byte);
     }
     Ok(res)

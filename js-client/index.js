@@ -82,6 +82,9 @@ export class KissWebSocket extends EventTarget {
       const endIdx = this.buffer.indexOf(FEND, 1);
       if (endIdx === -1) {
         // We have a start but no end yet, wait for more data
+        if (this.buffer.length > 8192) {
+          this.buffer = this.buffer.slice(1);
+        }
         break;
       }
 

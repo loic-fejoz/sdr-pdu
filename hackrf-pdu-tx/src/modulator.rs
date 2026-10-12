@@ -1,33 +1,5 @@
 use crate::nco::TableNco;
-
-pub struct Scrambler {
-    state: u32,
-    poly: u32,
-}
-
-impl Scrambler {
-    pub fn new(poly: u32, seed: u32) -> Self {
-        Self { state: seed, poly }
-    }
-
-    /// Process a single bit through the multiplicative scrambler.
-    /// Standard G3RUH: poly = 1 + x^12 + x^17.
-    /// In bitmask form, bit 12 and 17 are set.
-    pub fn scramble_bit(&mut self, bit: u8) -> u8 {
-        // Calculate the XOR sum of bits defined by the polynomial
-        // state & poly picks the bits to XOR.
-        let xor_sum = (self.state & self.poly).count_ones() % 2;
-        let out_bit = (bit as u32 ^ xor_sum) as u8 & 1;
-
-        // Shift state and insert the NEW bit (multiplicative scrambler)
-        self.state = (self.state << 1) | (out_bit as u32);
-        out_bit
-    }
-
-    pub fn reset(&mut self, seed: u32) {
-        self.state = seed;
-    }
-}
+use sdr_pdu_utils::scrambler::Scrambler;
 
 pub struct FskModulator {
     nco: TableNco,
@@ -137,47 +109,30 @@ impl FskModulator {
     }
 }
 
+pub enum Modulator {
+    Fsk(FskModulator),
+    Qpsk(sdr_pdu_utils::qpsk::QpskModulator),
+}
+
+impl Modulator {
+    pub fn modulate(&mut self, data: &[u8]) -> Vec<i8> {
+        match self {
+            Modulator::Fsk(m) => m.modulate(data),
+            Modulator::Qpsk(m) => m.modulate_i8(data),
+        }
+    }
+
+    pub fn get_preamble_syncword_iq(&self) -> &[i8] {
+        match self {
+            Modulator::Fsk(m) => m.get_preamble_syncword_iq(),
+            Modulator::Qpsk(m) => m.get_preamble_syncword_iq_i8(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickcheck_macros::quickcheck;
-
-    struct Descrambler {
-        state: u32,
-        poly: u32,
-    }
-
-    impl Descrambler {
-        fn new(poly: u32, seed: u32) -> Self {
-            Self { state: seed, poly }
-        }
-
-        fn descramble_bit(&mut self, bit: u8) -> u8 {
-            let xor_sum = (self.state & self.poly).count_ones() % 2;
-            let out_bit = (bit as u32 ^ xor_sum) as u8 & 1;
-            self.state = (self.state << 1) | (bit as u32);
-            out_bit
-        }
-    }
-
-    #[quickcheck]
-    fn prop_scrambler_roundtrip(data: Vec<u8>, poly: u32, seed: u32) -> bool {
-        let poly = poly & 0x1FFFF; // Mask to 17 bits for G3RUH-like
-        let mut scr = Scrambler::new(poly, seed);
-        let mut descr = Descrambler::new(poly, seed);
-
-        for byte in data {
-            for i in 0..8 {
-                let bit = (byte >> (7 - i)) & 1;
-                let scrambled = scr.scramble_bit(bit);
-                let descrambled = descr.descramble_bit(scrambled);
-                if bit != descrambled {
-                    return false;
-                }
-            }
-        }
-        true
-    }
 
     #[test]
     fn test_modulator_length() {
@@ -192,32 +147,18 @@ mod tests {
     }
 
     #[test]
-    fn test_scrambler_g3ruh() {
-        // G3RUH: bits 12 and 17 (1-indexed) -> bits 11 and 16 (0-indexed)
-        let poly = (1 << 11) | (1 << 16);
-        let mut scr = Scrambler::new(poly, 0);
+    fn test_modulator_enum_qpsk_and_oqpsk() {
+        let mut qpsk = sdr_pdu_utils::qpsk::QpskModulator::new(1000000, 100000, false);
+        qpsk.set_preamble_and_syncword("0x55", 2, "0x7E").unwrap();
+        let mut mod_qpsk = Modulator::Qpsk(qpsk);
+        let samples = mod_qpsk.modulate(&[0x12, 0x34]);
+        assert!(!samples.is_empty());
+        assert!(!mod_qpsk.get_preamble_syncword_iq().is_empty());
 
-        // Input: all zeros
-        assert_eq!(scr.scramble_bit(0), 0);
-
-        // Input: 1
-        // out = 1 ^ (ones(0 & poly)%2) = 1. state = 1 (bit 0 set)
-        assert_eq!(scr.scramble_bit(1), 1);
-
-        // After 11 MORE shifts (total 12 bits processed), the first '1' reaches bit 11
-        for _ in 0..10 {
-            scr.scramble_bit(0);
-        }
-        // The state before the next call has bit 10 set.
-        // Wait, if state is (state << 1) | bit.
-        // Bit 0: 1. state = 1.
-        // Bit 1: 0. state = 10 (binary).
-        // ...
-        // Bit 11: 0. state = 100000000000 (binary) -> bit 11 is 1.
-        scr.scramble_bit(0);
-
-        // Now bit 11 of state is 1.
-        // Input 0: out = 0 ^ (ones(state & poly)%2) = 0 ^ 1 = 1.
-        assert_eq!(scr.scramble_bit(0), 1);
+        let mut oqpsk = sdr_pdu_utils::qpsk::QpskModulator::new(1000000, 100000, true);
+        oqpsk.set_preamble_and_syncword("0x55", 2, "0x7E").unwrap();
+        let mut mod_oqpsk = Modulator::Qpsk(oqpsk);
+        let samples_oqpsk = mod_oqpsk.modulate(&[0x12, 0x34]);
+        assert!(!samples_oqpsk.is_empty());
     }
 }
