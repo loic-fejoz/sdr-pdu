@@ -50,6 +50,10 @@ impl Decoder for KissDecoder {
                 }
 
                 return Ok(Some(decoded));
+            } else {
+                if src.len() > 8192 {
+                    src.advance(1);
+                }
             }
         } else {
             if src.len() > 8192 {

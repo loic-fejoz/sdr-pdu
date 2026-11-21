@@ -1,4 +1,4 @@
-use crate::modulator::FskModulator;
+use crate::modulator::Modulator;
 use crate::pluto::SdrDevice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,22 +7,25 @@ use tracing::{error, info};
 
 pub struct TransmissionEngine<D: SdrDevice> {
     device: D,
-    modulator: FskModulator,
+    modulator: Modulator,
     freq_shared: Arc<AtomicU64>,
+    att_shared: Arc<AtomicU64>,
     receiver: mpsc::Receiver<Vec<u8>>,
 }
 
 impl<D: SdrDevice> TransmissionEngine<D> {
     pub fn new(
         device: D,
-        modulator: FskModulator,
+        modulator: Modulator,
         freq_shared: Arc<AtomicU64>,
+        att_shared: Arc<AtomicU64>,
         receiver: mpsc::Receiver<Vec<u8>>,
     ) -> Self {
         Self {
             device,
             modulator,
             freq_shared,
+            att_shared,
             receiver,
         }
     }
@@ -31,12 +34,18 @@ impl<D: SdrDevice> TransmissionEngine<D> {
         info!("Transmission engine started");
 
         // Start in silenced state
-        if let Err(e) = self.device.disable_tx() {
+        if let Err(e) = self.device.disable_tx().await {
             error!("Failed to initially silence TX: {}", e);
         }
 
         while let Some(frame) = self.receiver.recv().await {
             let freq = self.freq_shared.load(Ordering::SeqCst);
+            let att_tenths = self.att_shared.load(Ordering::SeqCst);
+            let att_db = att_tenths as f64 / 10.0;
+
+            if let Err(e) = self.device.set_attenuation(att_db).await {
+                error!("Failed to update attenuation: {}", e);
+            }
 
             // Modulate first
             let frame_iq = self.modulator.modulate(&frame);
@@ -44,13 +53,14 @@ impl<D: SdrDevice> TransmissionEngine<D> {
             let total_samples = (preamble_iq.len() + frame_iq.len()) / 2;
 
             info!(
-                "Transmitting frame (len={}) at {} Hz. Samples: {}",
+                "Transmitting frame (len={}) at {} Hz, attenuation {:.1} dB. Samples: {}",
                 frame.len(),
                 freq,
+                att_db,
                 total_samples
             );
 
-            if let Err(e) = self.device.set_frequency(freq) {
+            if let Err(e) = self.device.set_frequency(freq).await {
                 error!("Failed to set frequency: {}", e);
                 continue;
             }
@@ -59,15 +69,15 @@ impl<D: SdrDevice> TransmissionEngine<D> {
             full_iq.extend_from_slice(preamble_iq);
             full_iq.extend_from_slice(&frame_iq);
 
-            if let Err(e) = self.device.enable_tx() {
+            if let Err(e) = self.device.enable_tx().await {
                 error!("Failed to enable TX: {}", e);
             }
 
-            if let Err(e) = self.device.push_samples(&full_iq) {
+            if let Err(e) = self.device.push_samples(&full_iq).await {
                 error!("Failed to push samples: {}", e);
             }
 
-            if let Err(e) = self.device.disable_tx() {
+            if let Err(e) = self.device.disable_tx().await {
                 error!("Failed to silence TX after transmission: {}", e);
             }
         }
@@ -90,7 +100,13 @@ mod tests {
             .set_preamble_and_syncword("0x55", 8, "0x7E")
             .unwrap();
 
-        let engine = TransmissionEngine::new(device, modulat, freq.clone(), rx);
+        let engine = TransmissionEngine::new(
+            device,
+            Modulator::Fsk(modulat),
+            freq.clone(),
+            Arc::new(AtomicU64::new(100)),
+            rx,
+        );
 
         tx.send(vec![0xAA]).await.unwrap();
         drop(tx); // Close channel to terminate run loop

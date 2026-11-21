@@ -32,6 +32,8 @@ jobs:
       run: cargo clippy --workspace --all-targets -- -D warnings
     - name: Run tests
       run: cargo test --workspace
+    - name: Run GNU Radio verification in Docker
+      run: make -C sdr-pdu-utils test-gnuradio
 
   build-hackrf:
     needs: lint-and-test

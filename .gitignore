@@ -1,1 +1,4 @@
 target
+*.fc32
+docker/gnuradio/scripts/*.fc32
+docker/gnuradio/scripts/*.bin

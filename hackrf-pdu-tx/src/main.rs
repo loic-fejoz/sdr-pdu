@@ -77,6 +77,22 @@ struct Args {
     #[arg(long, default_value_t = false)]
     scramble: bool,
 
+    /// Enable QPSK modulation
+    #[arg(long, default_value_t = false)]
+    qpsk: bool,
+
+    /// Enable Offset QPSK (OQPSK) modulation
+    #[arg(long, default_value_t = false)]
+    oqpsk: bool,
+
+    /// Enable Root Raised Cosine (RRC) pulse shaping filter
+    #[arg(long, default_value_t = false)]
+    rrc: bool,
+
+    /// Roll-off factor alpha for RRC filter (e.g. 0.35, 0.5)
+    #[arg(long, default_value_t = 0.35)]
+    rrc_alpha: f64,
+
     /// Scrambler polynomial (hex bitmask). Default G3RUH: x^17 + x^12 + 1 -> bit 16 and 11 set -> 0x21000 (shifted by 1 for multiplicative logic)
     /// Actually standard G3RUH bits are 12 and 17.
     /// If we use 0-indexed: bits 11 and 16.
@@ -102,19 +118,48 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("HackRF init failed: {}", e))?;
 
-    let mut modulator = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
+    let scrambler_config = if args.scramble {
+        let poly = u32::from_str_radix(
+            args.poly.trim_start_matches("0x").trim_start_matches("0X"),
+            16,
+        )?;
+        let seed = u32::from_str_radix(
+            args.seed.trim_start_matches("0x").trim_start_matches("0X"),
+            16,
+        )?;
+        Some((poly, seed))
+    } else {
+        None
+    };
 
-    if args.scramble {
-        let poly = u32::from_str_radix(args.poly.trim_start_matches("0x"), 16)?;
-        let seed = u32::from_str_radix(args.seed.trim_start_matches("0x"), 16)?;
-        modulator.set_scrambler(poly, seed);
-    }
-
-    modulator.set_preamble_and_syncword(
-        &args.preamble,
-        args.preamble_repetition,
-        &args.syncword,
-    )?;
+    let modulator = if args.qpsk || args.oqpsk {
+        let is_oqpsk = args.oqpsk;
+        let mut qpsk_mod =
+            sdr_pdu_utils::qpsk::QpskModulator::new(args.sample_rate, args.baud_rate, is_oqpsk);
+        if args.rrc {
+            qpsk_mod.set_rrc_filter(args.rrc_alpha, 8);
+        }
+        if let Some((poly, seed)) = scrambler_config {
+            qpsk_mod.set_scrambler(poly, seed);
+        }
+        qpsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Qpsk(qpsk_mod)
+    } else {
+        let mut fsk_mod = FskModulator::new(args.sample_rate, args.baud_rate, args.deviation);
+        if let Some((poly, seed)) = scrambler_config {
+            fsk_mod.set_scrambler(poly, seed);
+        }
+        fsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Fsk(fsk_mod)
+    };
 
     let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
     let kiss_server = KissServer::new(tx.clone());

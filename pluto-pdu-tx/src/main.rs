@@ -74,6 +74,26 @@ struct Args {
     /// Syncword (e.g., 0x1ACFFC1D)
     #[arg(long, default_value = "0x7E")]
     syncword: String,
+
+    /// Enable G3RUH-style scrambling
+    #[arg(long, default_value_t = false)]
+    g3ruh: bool,
+
+    /// Enable QPSK modulation
+    #[arg(long, default_value_t = false)]
+    qpsk: bool,
+
+    /// Enable Offset QPSK (OQPSK) modulation
+    #[arg(long, default_value_t = false)]
+    oqpsk: bool,
+
+    /// Enable Root Raised Cosine (RRC) pulse shaping filter
+    #[arg(long, default_value_t = false)]
+    rrc: bool,
+
+    /// Roll-off factor alpha for RRC filter (e.g. 0.35, 0.5)
+    #[arg(long, default_value_t = 0.35)]
+    rrc_alpha: f64,
 }
 
 #[tokio::main]
@@ -83,6 +103,8 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel(100);
     let freq = Arc::new(AtomicU64::new(args.frequency));
+    let attenuation_tenths = (args.attenuation.abs() * 10.0).round() as u64;
+    let att = Arc::new(AtomicU64::new(attenuation_tenths));
 
     // Initialize Pluto
     let device = PlutoDevice::new(
@@ -95,18 +117,46 @@ async fn main() -> anyhow::Result<()> {
 
     // Read back actual sample rate if possible to ensure NCO is correct
     let actual_sample_rate = device.get_actual_sample_rate();
-    let mut modulator = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
 
-    modulator.set_preamble_and_syncword(
-        &args.preamble,
-        args.preamble_repetition,
-        &args.syncword,
-    )?;
+    let modulator = if args.qpsk || args.oqpsk {
+        let is_oqpsk = args.oqpsk;
+        let mut qpsk_mod =
+            sdr_pdu_utils::qpsk::QpskModulator::new(actual_sample_rate, args.baud_rate, is_oqpsk);
+        if args.rrc {
+            qpsk_mod.set_rrc_filter(args.rrc_alpha, 8);
+        }
+        if args.g3ruh {
+            qpsk_mod.set_scrambler(
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
+            );
+        }
+        qpsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Qpsk(qpsk_mod)
+    } else {
+        let mut fsk_mod = FskModulator::new(actual_sample_rate, args.baud_rate, args.deviation);
+        if args.g3ruh {
+            fsk_mod.set_scrambler(
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_POLY,
+                sdr_pdu_utils::scrambler::Scrambler::G3RUH_SEED,
+            );
+        }
+        fsk_mod.set_preamble_and_syncword(
+            &args.preamble,
+            args.preamble_repetition,
+            &args.syncword,
+        )?;
+        crate::modulator::Modulator::Fsk(fsk_mod)
+    };
 
-    let engine = TransmissionEngine::new(device, modulator, freq.clone(), rx);
+    let engine = TransmissionEngine::new(device, modulator, freq.clone(), att.clone(), rx);
     let kiss_server = KissServer::new(tx.clone());
     let kiss_ws_server = KissWsServer::new(tx);
-    let cat_server = CatServer::new(freq);
+    let cat_server = CatServer::new(freq).with_attenuation(att);
 
     let kiss_addr = format!("{}:{}", args.listen, args.kiss_port);
     let kiss_ws_addr = format!("{}:{}", args.listen, args.kiss_ws_port);

@@ -54,10 +54,12 @@ Options:
   -d, --deviation <HZ>                FSK deviation in Hz [default: 2400]
       --attenuation <DB>              TX attenuation in dB (0-89) [default: 10.0]
       --bandwidth <BANDWIDTH>         SDR analog bandwidth [default: 1000000]
-      --attenuation <ATTENUATION>     TX attenuation in dB (0-89) [default: 10.0]
       --preamble <PREAMBLE>           Preamble byte (hex) [default: 0x55]
       --preamble-repetition <REP>     Preamble repetitions [default: 8]
       --syncword <SYNCWORD>           Syncword (hex) [default: 0x7E]
+      --g3ruh                         Enable G3RUH-style scrambling
+      --qpsk                          Enable QPSK modulation
+      --oqpsk                         Enable Offset QPSK (OQPSK) modulation
   -h, --help                          Print help
 ```
 
