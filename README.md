@@ -10,6 +10,7 @@ In satellite operations, you need a simple, reliable way to handle frames. I use
 
 - [**`hackrf-pdu-tx`**](./hackrf-pdu-tx/): An async 2-FSK transmitter for the HackRF One. It connects KISS-based digital protocols to the hardware and includes a CAT server for frequency control.
 - [**`pluto-pdu-tx`**](./pluto-pdu-tx/): A gateway for the PlutoSDR (AD9361/AD9363) written in Rust. It supports KISS, CAT (for Doppler correction), and uses ARM NEON for faster DSP.
+- [**`esp-pdu-tnc`**](./esp-pdu-tnc/): A host KISS + CAT server and ESP32/ESP32-S3 firmware (`esp-pdu-firmware`) for bidirectional unencrypted ESP-NOW PDU transmission in the 2.4 GHz amateur radio band.
 - [**`pdu-proxy`**](./pdu-proxy/): A developer tool that proxies a TCP KISS stream (like from Direwolf) to multiple TCP and WebSocket clients.
 - [**`sdr-pdu-utils`**](./sdr-pdu-utils/): A shared Rust crate containing the core KISS and server logic used by the other tools.
 - [**`js-client`**](./js-client/): A JavaScript library designed to talk to these tools over WebSockets.

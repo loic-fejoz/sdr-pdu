@@ -8,6 +8,9 @@ Develop a set of utility tools to use SDR radios like plutosdr, hackrf, or MMDVM
 
 - `hackrf-pdu-tx`: a KISS and CAT server to send 2FSK frames over an HackRF
 - `pluto-pdu-tx`: a KISS and CAT server to send 2FSK frames over a PlutoSDR
+- `esp-pdu-tnc`: a host TCP/WS KISS and CAT server bridging to ESP32/ESP32-S3 ESP-NOW TNCs
+- `esp-pdu-firmware`: Embassy + `esp-hal` + `esp-wifi` firmware for ESP32 and ESP32-S3
+- `esp-pdu-protocol`: shared `#![no_std]` KISS and `SetHardware` protocol definitions
 - `pdu-proxy`: a TCP/WS KISS proxy for TCP KISS.
 - `sdr-pdu-utils`: a Rust crate for shared code
 

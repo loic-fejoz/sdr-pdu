@@ -1,0 +1,51 @@
+[workspace]
+
+[package]
+name = "esp-pdu-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "ESP32 / ESP32-S3 Embassy + ESP-NOW KISS PDU TNC firmware"
+
+[features]
+default = ["esp32s3"]
+esp32 = [
+    "esp-hal/esp32",
+    "esp-hal-embassy/esp32",
+    "esp-wifi/esp32",
+    "esp-wifi-sys/esp32",
+    "esp-backtrace/esp32",
+    "esp-println/esp32",
+]
+esp32s3 = [
+    "esp-hal/esp32s3",
+    "esp-hal-embassy/esp32s3",
+    "esp-wifi/esp32s3",
+    "esp-wifi-sys/esp32s3",
+    "esp-backtrace/esp32s3",
+    "esp-println/esp32s3",
+]
+
+[dependencies]
+esp-pdu-protocol = { path = "../esp-pdu-protocol" }
+
+esp-hal = "0.22.0"
+esp-hal-embassy = { version = "0.5.0", features = ["integrated-timers"] }
+esp-alloc = "0.5.0"
+esp-backtrace = { version = "0.14.2", features = ["exception-handler", "panic-handler", "println"] }
+esp-println = { version = "0.12.0", features = ["auto"] }
+esp-wifi = { version = "0.11.0", features = ["esp-now", "wifi"] }
+esp-wifi-sys = "0.7.1"
+enumset = "1.1"
+
+embassy-executor = { version = "0.6.3", features = ["task-arena-size-32768"] }
+embassy-futures = "0.1.1"
+embassy-sync = "0.6.0"
+embassy-time = "0.3.2"
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = "s"
+
+[profile.dev]
+opt-level = "s"
