@@ -31,7 +31,7 @@ esp-pdu-protocol = { path = "../esp-pdu-protocol" }
 esp-hal = "0.22.0"
 esp-hal-embassy = { version = "0.5.0", features = ["integrated-timers"] }
 esp-alloc = "0.5.0"
-esp-backtrace = { version = "0.14.2", features = ["exception-handler", "panic-handler", "println"] }
+esp-backtrace = { version = "0.14.2", features = ["exception-handler", "panic-handler", "println", "custom-halt"] }
 esp-println = { version = "0.12.0", features = ["auto"] }
 esp-wifi = { version = "0.11.0", features = ["esp-now", "wifi"] }
 esp-wifi-sys = "0.7.1"

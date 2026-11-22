@@ -5,7 +5,7 @@ extern crate alloc;
 
 use core::sync::atomic::{AtomicI8, AtomicU32, AtomicU8, Ordering};
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::join::join3;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
@@ -13,19 +13,25 @@ use enumset::EnumSet;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::rng::Rng;
-use esp_hal::timer::timg::TimerGroup;
+use esp_hal::timer::timg::{MwdtStage, TimerGroup};
 use esp_hal::uart::{Config as UartConfig, Uart, UartRx, UartTx};
 use esp_hal::Async;
 use esp_pdu_protocol::{
-    encode_kiss_frame, freq_hz_to_amateur_channel, HardwareCommand, KissCommand, KissStreamDecoder,
-    PhyRate, MAX_AMATEUR_CHANNEL, MAX_ESPNOW_PDU_LEN, MAX_KISS_FRAME_LEN, MAX_TX_POWER_QDBM,
-    MIN_AMATEUR_CHANNEL, MIN_TX_POWER_QDBM,
+    encode_kiss_frame, freq_hz_to_amateur_channel, is_valid_uart_baud, HardwareCommand,
+    KissCommand, KissStreamDecoder, PhyRate, MAX_AMATEUR_CHANNEL, MAX_ESPNOW_PDU_LEN,
+    MAX_KISS_FRAME_LEN, MAX_TX_POWER_QDBM, MIN_AMATEUR_CHANNEL, MIN_TX_POWER_QDBM,
 };
 use esp_wifi::esp_now::{EspNow, EspNowManager, PeerInfo, WifiPhyRate, BROADCAST_ADDRESS};
 use esp_wifi::wifi::Protocol;
 
 /// Maximum encoded KISS frame size: FEND + up to 2*(1 + 250) + FEND
 const MAX_ENCODED_KISS_LEN: usize = MAX_KISS_FRAME_LEN * 2 + 2;
+
+#[no_mangle]
+pub extern "Rust" fn custom_halt() -> ! {
+    esp_hal::reset::software_reset();
+    loop {}
+}
 
 struct KissFrameBuf {
     data: [u8; MAX_KISS_FRAME_LEN],
@@ -34,6 +40,7 @@ struct KissFrameBuf {
 
 static UART_TX_QUEUE: Channel<CriticalSectionRawMutex, KissFrameBuf, 24> = Channel::new();
 static ESPNOW_TX_QUEUE: Channel<CriticalSectionRawMutex, KissFrameBuf, 16> = Channel::new();
+static PENDING_UART_BAUD: AtomicU32 = AtomicU32::new(0);
 
 struct SharedRadioState {
     channel: AtomicU8,
@@ -42,6 +49,7 @@ struct SharedRadioState {
     rx_count: AtomicU32,
     tx_count: AtomicU32,
     last_rssi: AtomicI8,
+    last_src_mac: [AtomicU8; 6],
 }
 
 impl SharedRadioState {
@@ -53,6 +61,7 @@ impl SharedRadioState {
             rx_count: AtomicU32::new(0),
             tx_count: AtomicU32::new(0),
             last_rssi: AtomicI8::new(0),
+            last_src_mac: [const { AtomicU8::new(0) }; 6],
         }
     }
 }
@@ -172,16 +181,32 @@ async fn uart_tx_task(mut tx: UartTx<'static, Async>) {
             }
             let _ = tx.flush_async().await;
         }
+        let new_baud = PENDING_UART_BAUD.swap(0, Ordering::SeqCst);
+        if new_baud != 0 {
+            Timer::after(Duration::from_millis(20)).await;
+            let _ = tx.apply_config(&UartConfig::default().baudrate(new_baud));
+        }
     }
 }
 
-fn send_status_to_host(shared: &SharedRadioState) {
+fn send_hw_cmd_to_host(cmd: HardwareCommand) {
     let mut msg = KissFrameBuf {
         data: [0u8; MAX_KISS_FRAME_LEN],
         len: 0,
     };
     msg.data[0] = KissCommand::SetHardware as u8;
-    let status = HardwareCommand::Status {
+    if let Some(n) = cmd.encode(&mut msg.data[1..]) {
+        msg.len = 1 + n;
+        let _ = UART_TX_QUEUE.try_send(msg);
+    }
+}
+
+fn send_status_to_host(shared: &SharedRadioState) {
+    let mut last_src_mac = [0u8; 6];
+    for (i, slot) in last_src_mac.iter_mut().enumerate() {
+        *slot = shared.last_src_mac[i].load(Ordering::Relaxed);
+    }
+    send_hw_cmd_to_host(HardwareCommand::Status {
         channel: shared.channel.load(Ordering::Relaxed),
         tx_power_qdbm: shared.tx_power_qdbm.load(Ordering::Relaxed),
         phy_rate: PhyRate::from_u8(shared.phy_rate.load(Ordering::Relaxed))
@@ -189,11 +214,8 @@ fn send_status_to_host(shared: &SharedRadioState) {
         rx_count: shared.rx_count.load(Ordering::Relaxed),
         tx_count: shared.tx_count.load(Ordering::Relaxed),
         last_rssi: shared.last_rssi.load(Ordering::Relaxed),
-    };
-    if let Some(n) = status.encode(&mut msg.data[1..]) {
-        msg.len = 1 + n;
-        let _ = UART_TX_QUEUE.try_send(msg);
-    }
+        last_src_mac,
+    });
 }
 
 #[esp_hal_embassy::main]
@@ -205,6 +227,9 @@ async fn main(spawner: Spawner) {
     esp_alloc::heap_allocator!(72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let mut wdt0 = timg0.wdt;
+    wdt0.enable();
+    wdt0.set_timeout(MwdtStage::Stage0, esp_hal::time::Duration::millis(8_000));
     esp_hal_embassy::init(timg0.timer0);
 
     // UART0 connected to the USB-UART bridge on both boards:
@@ -235,12 +260,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(uart_tx_task(uart_tx)).ok();
 
     let timg1 = TimerGroup::new(peripherals.TIMG1);
-    let wifi_init = esp_wifi::init(
-        timg1.timer0,
-        Rng::new(peripherals.RNG),
-        peripherals.RADIO_CLK,
-    )
-    .unwrap();
+    let mut rng = Rng::new(peripherals.RNG);
+    let wifi_init = esp_wifi::init(timg1.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
     let esp_now = EspNow::new(&wifi_init, peripherals.WIFI).unwrap();
     let (manager, mut sender, mut receiver) = esp_now.split();
@@ -274,6 +295,15 @@ async fn main(spawner: Spawner) {
             match cmd {
                 KissCommand::DataFrame => {
                     if !payload.is_empty() && payload.len() <= MAX_ESPNOW_PDU_LEN {
+                        if !tx_cfg.full_duplex && tx_cfg.slot_time_10ms > 0 {
+                            let slot_ms = u64::from(tx_cfg.slot_time_10ms) * 10;
+                            for _ in 0..16 {
+                                if (rng.random() & 0xFF) as u8 <= tx_cfg.persistence {
+                                    break;
+                                }
+                                Timer::after(Duration::from_millis(slot_ms)).await;
+                            }
+                        }
                         if tx_cfg.tx_delay_10ms > 0 {
                             Timer::after(Duration::from_millis(
                                 u64::from(tx_cfg.tx_delay_10ms) * 10,
@@ -365,17 +395,13 @@ async fn main(spawner: Spawner) {
                                 send_status_to_host(&shared);
                             }
                             HardwareCommand::GetPeerMac => {
-                                let mut msg = KissFrameBuf {
-                                    data: [0u8; MAX_KISS_FRAME_LEN],
-                                    len: 0,
-                                };
-                                msg.data[0] = KissCommand::SetHardware as u8;
-                                if let Some(n) = HardwareCommand::PeerMac(tx_cfg.tx_peer)
-                                    .encode(&mut msg.data[1..])
-                                {
-                                    msg.len = 1 + n;
-                                    let _ = UART_TX_QUEUE.try_send(msg);
+                                send_hw_cmd_to_host(HardwareCommand::PeerMac(tx_cfg.tx_peer));
+                            }
+                            HardwareCommand::SetUartBaud(baud) => {
+                                if is_valid_uart_baud(baud) {
+                                    PENDING_UART_BAUD.store(baud, Ordering::SeqCst);
                                 }
+                                send_status_to_host(&shared);
                             }
                             HardwareCommand::GetStatus => {
                                 send_status_to_host(&shared);
@@ -398,7 +424,10 @@ async fn main(spawner: Spawner) {
                 shared
                     .last_rssi
                     .store(rx_data.info.rx_control.rssi as i8, Ordering::Relaxed);
-                // Push Status before DataFrame so the host has the fresh RSSI when logging/forwarding the PDU.
+                for (i, &b) in rx_data.info.src_address.iter().enumerate() {
+                    shared.last_src_mac[i].store(b, Ordering::Relaxed);
+                }
+                // Push Status before DataFrame so the host has fresh RSSI and src_mac when logging/forwarding the PDU.
                 send_status_to_host(&shared);
                 let mut msg = KissFrameBuf {
                     data: [0u8; MAX_KISS_FRAME_LEN],
@@ -411,5 +440,12 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    join(tx_fut, rx_fut).await;
+    let wdt_fut = async {
+        loop {
+            wdt0.feed();
+            Timer::after(Duration::from_secs(2)).await;
+        }
+    };
+
+    join3(tx_fut, rx_fut, wdt_fut).await;
 }

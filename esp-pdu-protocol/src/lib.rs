@@ -24,6 +24,14 @@ pub const MAX_AMATEUR_CHANNEL: u8 = 6;
 pub const MIN_TX_POWER_QDBM: u8 = 8;
 pub const MAX_TX_POWER_QDBM: u8 = 80;
 
+/// Check whether a UART baud rate is supported for dynamic host-TNC negotiation.
+pub const fn is_valid_uart_baud(baud: u32) -> bool {
+    matches!(
+        baud,
+        9_600 | 19_200 | 38_400 | 57_600 | 115_200 | 230_400 | 460_800 | 921_600
+    )
+}
+
 /// KISS command codes (lower nibble of the KISS type byte).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -145,6 +153,8 @@ pub enum HardwareCommand {
     GetPeerMac,
     /// Peer MAC response from firmware.
     PeerMac([u8; 6]),
+    /// Set UART0 baud rate dynamically (host <-> firmware negotiation).
+    SetUartBaud(u32),
     /// Query current firmware radio status.
     GetStatus,
     /// Status response from firmware.
@@ -155,6 +165,7 @@ pub enum HardwareCommand {
         rx_count: u32,
         tx_count: u32,
         last_rssi: i8,
+        last_src_mac: [u8; 6],
     },
 }
 
@@ -166,6 +177,7 @@ impl HardwareCommand {
     pub const SUB_GET_STATUS: u8 = 0x05;
     pub const SUB_SET_PEER_MAC: u8 = 0x07;
     pub const SUB_GET_PEER_MAC: u8 = 0x08;
+    pub const SUB_SET_UART_BAUD: u8 = 0x09;
     pub const SUB_STATUS_RESP: u8 = 0x85;
     pub const SUB_PEER_MAC_RESP: u8 = 0x88;
 
@@ -228,6 +240,14 @@ impl HardwareCommand {
                 out[1..7].copy_from_slice(&mac);
                 Some(7)
             }
+            Self::SetUartBaud(baud) => {
+                if out.len() < 5 {
+                    return None;
+                }
+                out[0] = Self::SUB_SET_UART_BAUD;
+                out[1..5].copy_from_slice(&baud.to_be_bytes());
+                Some(5)
+            }
             Self::GetStatus => {
                 if out.is_empty() {
                     return None;
@@ -242,8 +262,9 @@ impl HardwareCommand {
                 rx_count,
                 tx_count,
                 last_rssi,
+                last_src_mac,
             } => {
-                if out.len() < 13 {
+                if out.len() < 19 {
                     return None;
                 }
                 out[0] = Self::SUB_STATUS_RESP;
@@ -253,7 +274,8 @@ impl HardwareCommand {
                 out[4..8].copy_from_slice(&rx_count.to_be_bytes());
                 out[8..12].copy_from_slice(&tx_count.to_be_bytes());
                 out[12] = last_rssi as u8;
-                Some(13)
+                out[13..19].copy_from_slice(&last_src_mac);
+                Some(19)
             }
         }
     }
@@ -283,6 +305,11 @@ impl HardwareCommand {
                 mac.copy_from_slice(&payload[1..7]);
                 Some(Self::PeerMac(mac))
             }
+            Self::SUB_SET_UART_BAUD if payload.len() >= 5 => {
+                Some(Self::SetUartBaud(u32::from_be_bytes([
+                    payload[1], payload[2], payload[3], payload[4],
+                ])))
+            }
             Self::SUB_GET_STATUS => Some(Self::GetStatus),
             Self::SUB_STATUS_RESP if payload.len() >= 13 => {
                 let channel = payload[1];
@@ -292,6 +319,10 @@ impl HardwareCommand {
                 let tx_count =
                     u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
                 let last_rssi = payload[12] as i8;
+                let mut last_src_mac = [0u8; 6];
+                if payload.len() >= 19 {
+                    last_src_mac.copy_from_slice(&payload[13..19]);
+                }
                 Some(Self::Status {
                     channel,
                     tx_power_qdbm,
@@ -299,6 +330,7 @@ impl HardwareCommand {
                     rx_count,
                     tx_count,
                     last_rssi,
+                    last_src_mac,
                 })
             }
             _ => None,
@@ -501,6 +533,7 @@ mod tests {
             HardwareCommand::SetPeerMac([0x48, 0x27, 0xE2, 0xE4, 0x74, 0x2C]),
             HardwareCommand::GetPeerMac,
             HardwareCommand::PeerMac([0x48, 0x27, 0xE2, 0xE4, 0x74, 0x2C]),
+            HardwareCommand::SetUartBaud(921_600),
             HardwareCommand::GetStatus,
             HardwareCommand::Status {
                 channel: 3,
@@ -509,6 +542,7 @@ mod tests {
                 rx_count: 12,
                 tx_count: 34,
                 last_rssi: -55,
+                last_src_mac: [0xFC, 0xB4, 0x67, 0x74, 0x32, 0x84],
             },
         ];
 
@@ -518,6 +552,10 @@ mod tests {
             let decoded = HardwareCommand::decode(&buf[..n]).unwrap();
             assert_eq!(decoded, cmd);
         }
+
+        assert!(is_valid_uart_baud(115_200));
+        assert!(is_valid_uart_baud(921_600));
+        assert!(!is_valid_uart_baud(12_345));
     }
 
     #[test]

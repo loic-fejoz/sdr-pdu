@@ -41,6 +41,13 @@ cargo +esp build --release --target xtensa-esp32-none-elf --features esp32 --no-
 espflash flash --port /dev/ttyACM0 target/xtensa-esp32-none-elf/release/esp-pdu-firmware
 ```
 
+## Features & Operations
+
+- **Dynamic Baud Rate Negotiation (`--baud-rate`):** Firmware boots at `115200` baud; `esp-pdu-tnc` automatically negotiates higher rates (e.g. `--baud-rate 921600`) via `SetUartBaud`.
+- **Automatic Serial Reconnect & Reboot Recovery:** TCP/WS KISS and CAT servers stay alive across USB disconnects or ESP32 watchdog/panic resets, automatically reconnecting and re-applying active radio configuration.
+- **Fail-Safe Callsign ID Beacon (`--callsign`, `--beacon-interval-secs`):** Optionally transmits `DE <CALLSIGN> ESP-PDU-TNC` periodically whenever TX activity occurred during the interval (default `600` seconds).
+- **CAT Signal Strength:** Supports `l STRENGTH` (S9-normalized `rssi_dbm + 73`) and `l RAWSTR` (raw `rssi_dbm`) over Hamlib `rigctld`.
+
 ## Running the Host KISS + CAT Servers
 
 Terminal 1 (ESP-WROOM-32):

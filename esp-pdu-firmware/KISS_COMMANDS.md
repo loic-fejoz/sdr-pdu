@@ -23,10 +23,10 @@ Only KISS port `0` (`0x00`–`0x06`) and `Return` (`0xFF`) are accepted; non-zer
 
 | Command | Code (`TYPE_BYTE`) | Direction | Payload | Firmware Behavior |
 |---------|--------------------|-----------|---------|-------------------|
-| `DataFrame` | `0x00` | Host ↔ ESP32 | `1..=250` bytes (raw PDU, no fragmentation) | TX: waits `TxDelay`, sends via ESP-NOW to `tx_peer` (broadcast `FF:FF:FF:FF:FF:FF` by default, or unicast peer), waits `TxTail`. RX: pushes a `Status` (`0x06 0x85`) frame followed by the received PDU so the host has fresh RSSI. |
+| `DataFrame` | `0x00` | Host ↔ ESP32 | `1..=250` bytes (raw PDU, no fragmentation) | TX: if `!FullDuplex && SlotTime > 0`, runs p-persistent random slot backoff (`Persistence / 255`), waits `TxDelay`, sends via ESP-NOW to `tx_peer` (broadcast `FF:FF:FF:FF:FF:FF` by default, or unicast peer), waits `TxTail`. RX: pushes a `Status` (`0x06 0x85`) frame followed by the received PDU so the host has fresh RSSI and sender MAC. |
 | `TxDelay` | `0x01` | Host → ESP32 | 1 byte (`u8`, units of 10 ms) | Sets pre-TX delay (`tx_delay_10ms`). |
-| `Persistence` | `0x02` | Host → ESP32 | 1 byte (`u8`, `0..=255`) | Stores KISS persistence parameter. |
-| `SlotTime` | `0x03` | Host → ESP32 | 1 byte (`u8`, units of 10 ms) | Stores KISS slot time parameter. |
+| `Persistence` | `0x02` | Host → ESP32 | 1 byte (`u8`, `0..=255`) | Sets p-persistent CSMA probability threshold (`(rng & 0xFF) <= persistence`). |
+| `SlotTime` | `0x03` | Host → ESP32 | 1 byte (`u8`, units of 10 ms) | Sets p-persistent CSMA slot duration (`0` disables software slot backoff). |
 | `TxTail` | `0x04` | Host → ESP32 | 1 byte (`u8`, units of 10 ms) | Sets post-TX delay (`tx_tail_10ms`). |
 | `FullDuplex` | `0x05` | Host → ESP32 | 1 byte (`0` = half, nonzero = full) | Stores KISS full-duplex flag. |
 | `SetHardware` | `0x06` | Host ↔ ESP32 | `[ SUBCMD, ... ]` (see §3) | Configures radio parameters or reports status. |
@@ -47,10 +47,11 @@ All `SetHardware` frames start with `0x06` followed by a 1-byte subcommand ID:
 | `GetStatus` | `0x05` | Host → ESP32 | None | Requests current radio status. Replies with `Status`. |
 | `SetPeerMac` | `0x07` | Host → ESP32 | `mac: [u8; 6]` | Sets TX destination MAC (`FF:FF:FF:FF:FF:FF` for broadcast, or a unicast MAC registered as an unencrypted peer). RX always accepts both broadcast and unicast-to-us. Replies with `Status`. |
 | `GetPeerMac` | `0x08` | Host → ESP32 | None | Requests the active TX destination peer MAC. Replies with `PeerMac (0x88)`. |
-| `Status` | `0x85` | ESP32 → Host | 12 bytes (see below) | Emitted on boot, after any `SetHardware` command, and before each RX `DataFrame`. |
+| `SetUartBaud` | `0x09` | Host → ESP32 | `baud: u32` (4 B BE) | Switches UART0 baud rate (`9600`..`921600`) after flushing the `Status` reply. |
+| `Status` | `0x85` | ESP32 → Host | 18 bytes (see below) | Emitted on boot, after any `SetHardware` command, and before each RX `DataFrame`. |
 | `PeerMac` | `0x88` | ESP32 → Host | `mac: [u8; 6]` | Response to `GetPeerMac (0x08)` containing the active 6-byte TX peer MAC. |
 
-### `Status (0x85)` Payload Layout (12 bytes after `0x06 0x85`)
+### `Status (0x85)` Payload Layout (18 bytes after `0x06 0x85`)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -60,6 +61,7 @@ All `SetHardware` frames start with `0x06` followed by a 1-byte subcommand ID:
 | 3..7 | `rx_count` | `u32` BE | Total ESP-NOW PDUs received |
 | 7..11 | `tx_count` | `u32` BE | Total ESP-NOW PDUs transmitted |
 | 11 | `last_rssi` | `i8` | RSSI in dBm of the last received ESP-NOW frame |
+| 12..18 | `last_src_mac` | `[u8; 6]` | Sender's 802.11 MAC address for the last received ESP-NOW frame |
 
 ---
 

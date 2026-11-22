@@ -5,17 +5,17 @@ use anyhow::Context;
 use clap::Parser;
 use esp_pdu_protocol::{
     HardwareCommand, KissCommand, MAX_TX_POWER_QDBM, MIN_TX_POWER_QDBM, PhyRate,
-    channel_to_freq_hz, freq_hz_to_amateur_channel,
+    channel_to_freq_hz, freq_hz_to_amateur_channel, is_valid_uart_baud,
 };
 use futures::{SinkExt, StreamExt};
 use sdr_pdu_utils::cat::CatServer;
 use sdr_pdu_utils::kiss::{KissDecoder, KissEncoder};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI8, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{broadcast, mpsc};
-use tokio_serial::{SerialPort, SerialPortBuilderExt};
+use tokio_serial::{SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, warn};
 
@@ -46,7 +46,7 @@ struct Args {
     #[arg(short, long)]
     serial_port: String,
 
-    /// Serial port baud rate
+    /// Target serial port baud rate (boots at 115200 then negotiates dynamically via SetUartBaud)
     #[arg(short, long, default_value_t = 115200)]
     baud_rate: u32,
 
@@ -65,6 +65,26 @@ struct Args {
     /// Destination peer MAC address for TX (default: ff:ff:ff:ff:ff:ff for broadcast)
     #[arg(long, default_value = "ff:ff:ff:ff:ff:ff")]
     peer_mac: String,
+
+    /// Optional amateur radio callsign for periodic fail-safe ID beacon (transmitted only when TX occurred)
+    #[arg(long)]
+    callsign: Option<String>,
+
+    /// Callsign ID beacon interval in seconds (used when --callsign is set)
+    #[arg(long, default_value_t = 600)]
+    beacon_interval_secs: u64,
+}
+
+#[derive(Clone)]
+struct ActiveRadioConfig {
+    phy_rate: PhyRate,
+    peer_mac: [u8; 6],
+    tx_delay: Option<u8>,
+    persistence: Option<u8>,
+    slot_time: Option<u8>,
+    tx_tail: Option<u8>,
+    full_duplex: Option<u8>,
+    target_baud: u32,
 }
 
 fn parse_phy_rate(s: &str) -> anyhow::Result<PhyRate> {
@@ -129,12 +149,94 @@ fn qdbm_to_attenuation_tenths(qdbm: u8) -> u64 {
 }
 
 fn encode_hw_kiss_frame(cmd: HardwareCommand) -> Option<Vec<u8>> {
-    let mut payload = [0u8; 16];
+    let mut payload = [0u8; 24];
     let n = cmd.encode(&mut payload)?;
     let mut frame = Vec::with_capacity(n + 1);
     frame.push(KissCommand::SetHardware as u8);
     frame.extend_from_slice(&payload[..n]);
     Some(frame)
+}
+
+async fn drain_serial(serial: &mut SerialStream) {
+    let mut drain_buf = [0u8; 256];
+    while let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(20), serial.read(&mut drain_buf)).await
+    {
+        if n == 0 {
+            break;
+        }
+    }
+}
+
+async fn connect_and_configure_serial(
+    port_path: &str,
+    target_baud: u32,
+) -> anyhow::Result<SerialStream> {
+    let mut serial = tokio_serial::new(port_path, 115_200)
+        .open_native_async()
+        .with_context(|| format!("Failed to open serial port {}", port_path))?;
+
+    // Deassert DTR/RTS so ESP32 auto-reset circuits stay in normal run mode.
+    let _ = serial.write_data_terminal_ready(false);
+    let _ = serial.write_request_to_send(false);
+
+    // Allow time for the ESP32 to finish booting if opening the serial port toggled DTR/RTS.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    drain_serial(&mut serial).await;
+
+    if target_baud != 115_200 {
+        let frame = encode_hw_kiss_frame(HardwareCommand::SetUartBaud(target_baud))
+            .context("Failed to encode SetUartBaud")?;
+        let mut writer = FramedWrite::new(&mut serial, KissEncoder);
+        writer
+            .send(frame)
+            .await
+            .context("Failed to send SetUartBaud at 115200")?;
+        drop(writer);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        serial
+            .set_baud_rate(target_baud)
+            .with_context(|| format!("Failed to switch host serial baud to {}", target_baud))?;
+        drain_serial(&mut serial).await;
+    }
+
+    Ok(serial)
+}
+
+async fn push_active_config<W>(
+    writer: &mut FramedWrite<W, KissEncoder>,
+    ch: u8,
+    qdbm: u8,
+    cfg: &ActiveRadioConfig,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    for cmd in [
+        HardwareCommand::SetChannel(ch),
+        HardwareCommand::SetTxPowerQdbm(qdbm),
+        HardwareCommand::SetPhyRate(cfg.phy_rate),
+        HardwareCommand::SetPeerMac(cfg.peer_mac),
+    ] {
+        if let Some(frame) = encode_hw_kiss_frame(cmd) {
+            writer.send(frame).await?;
+        }
+    }
+    for (cmd_byte, val_opt) in [
+        (KissCommand::TxDelay as u8, cfg.tx_delay),
+        (KissCommand::Persistence as u8, cfg.persistence),
+        (KissCommand::SlotTime as u8, cfg.slot_time),
+        (KissCommand::TxTail as u8, cfg.tx_tail),
+        (KissCommand::FullDuplex as u8, cfg.full_duplex),
+    ] {
+        if let Some(val) = val_opt {
+            writer.send(vec![cmd_byte, val]).await?;
+        }
+    }
+    if let Some(frame) = encode_hw_kiss_frame(HardwareCommand::GetStatus) {
+        writer.send(frame).await?;
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -148,6 +250,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
 
+    if !is_valid_uart_baud(args.baud_rate) {
+        anyhow::bail!(
+            "Unsupported --baud-rate {} (allowed: 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)",
+            args.baud_rate
+        );
+    }
+
     if args.attenuation < 0.0 || !args.attenuation.is_finite() {
         anyhow::bail!("Attenuation must be a non-negative number in dB (0.0 to 18.0)");
     }
@@ -157,6 +266,20 @@ async fn main() -> anyhow::Result<()> {
             args.attenuation
         );
     }
+
+    let callsign = match args.callsign {
+        Some(raw) => {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() || trimmed.len() > 32 {
+                anyhow::bail!("--callsign must be 1..=32 non-whitespace characters");
+            }
+            if args.beacon_interval_secs == 0 {
+                anyhow::bail!("--beacon-interval-secs must be greater than 0");
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
 
     let initial_ch = freq_hz_to_amateur_channel(args.frequency).with_context(|| {
         format!(
@@ -170,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
     let initial_qdbm = attenuation_tenths_to_qdbm(initial_att_tenths);
 
     info!(
-        "Opening serial port {} at {} baud (initial ch={}, {} Hz, {:.2} dBm, {:?}, peer={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
+        "Starting esp-pdu-tnc on {} (target {} baud, ch={}, {} Hz, {:.2} dBm, {:?}, peer={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
         args.serial_port,
         args.baud_rate,
         initial_ch,
@@ -185,44 +308,8 @@ async fn main() -> anyhow::Result<()> {
         peer_mac[5]
     );
 
-    let mut serial = tokio_serial::new(&args.serial_port, args.baud_rate)
-        .open_native_async()
-        .with_context(|| format!("Failed to open serial port {}", args.serial_port))?;
-
-    // Deassert DTR/RTS so ESP32 auto-reset circuits stay in normal run mode.
-    let _ = serial.write_data_terminal_ready(false);
-    let _ = serial.write_request_to_send(false);
-
-    // Allow time for the ESP32 to finish booting if opening the serial port toggled DTR/RTS.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-
-    // Drain any bootloader/startup bytes buffered before initial host configuration.
-    let mut drain_buf = [0u8; 256];
-    while let Ok(Ok(n)) =
-        tokio::time::timeout(Duration::from_millis(20), serial.read(&mut drain_buf)).await
-    {
-        if n == 0 {
-            break;
-        }
-    }
-
-    let (serial_rx, serial_tx) = tokio::io::split(serial);
-
     let (to_tnc_tx, mut to_tnc_rx) = mpsc::channel::<Vec<u8>>(128);
     let (from_tnc_tx, _) = broadcast::channel::<Vec<u8>>(128);
-
-    // Send initial radio configuration over KISS SetHardware
-    for cmd in [
-        HardwareCommand::SetChannel(initial_ch),
-        HardwareCommand::SetTxPowerQdbm(initial_qdbm),
-        HardwareCommand::SetPhyRate(phy_rate),
-        HardwareCommand::SetPeerMac(peer_mac),
-        HardwareCommand::GetStatus,
-    ] {
-        if let Some(frame) = encode_hw_kiss_frame(cmd) {
-            let _ = to_tnc_tx.send(frame).await;
-        }
-    }
 
     let freq_atomic = Arc::new(AtomicU64::new(args.frequency));
     let att_atomic = Arc::new(AtomicU64::new(initial_att_tenths));
@@ -231,18 +318,9 @@ async fn main() -> anyhow::Result<()> {
     let cat_pending_ch = Arc::new(AtomicU8::new(0));
     let cat_pending_qdbm = Arc::new(AtomicU8::new(0));
     let last_rssi_atomic = Arc::new(AtomicI8::new(0));
+    let tx_activity_since_beacon = Arc::new(AtomicBool::new(false));
 
-    let serial_tx_fut = async move {
-        let mut writer = FramedWrite::new(serial_tx, KissEncoder);
-        while let Some(frame) = to_tnc_rx.recv().await {
-            writer
-                .send(frame)
-                .await
-                .context("Serial write error (TNC disconnected)")?;
-        }
-        anyhow::Result::<()>::Err(anyhow::anyhow!("Serial TX command channel closed"))
-    };
-
+    let serial_port_path = args.serial_port.clone();
     let from_tnc_tx_clone = from_tnc_tx.clone();
     let rssi_rx = last_rssi_atomic.clone();
     let freq_rx = freq_atomic.clone();
@@ -251,82 +329,279 @@ async fn main() -> anyhow::Result<()> {
     let applied_qdbm_rx = applied_qdbm.clone();
     let cat_pending_ch_rx = cat_pending_ch.clone();
     let cat_pending_qdbm_rx = cat_pending_qdbm.clone();
-    let serial_rx_fut = async move {
-        let mut reader = FramedRead::new(serial_rx, KissDecoder);
-        while let Some(res) = reader.next().await {
-            let frame = res.context("Serial read error (TNC disconnected)")?;
-            if frame.is_empty() {
-                continue;
-            }
-            match KissCommand::from_type_byte(frame[0]) {
-                Some(KissCommand::DataFrame) => {
-                    let rssi = rssi_rx.load(Ordering::Relaxed);
-                    info!("RX PDU ({} bytes, last_rssi={} dBm)", frame.len() - 1, rssi);
-                    let _ = from_tnc_tx_clone.send(frame);
-                }
-                Some(KissCommand::SetHardware) => {
-                    match HardwareCommand::decode(&frame[1..]) {
-                        Some(HardwareCommand::Status {
-                            channel,
-                            tx_power_qdbm,
-                            phy_rate,
-                            rx_count,
-                            tx_count,
-                            last_rssi,
-                        }) => {
-                            rssi_rx.store(last_rssi, Ordering::Relaxed);
-                            applied_ch_rx.store(channel, Ordering::SeqCst);
-                            applied_qdbm_rx.store(tx_power_qdbm, Ordering::SeqCst);
+    let tx_activity_serial = tx_activity_since_beacon.clone();
 
-                            let pending_ch = cat_pending_ch_rx.load(Ordering::SeqCst);
-                            if pending_ch == 0 || pending_ch == channel {
-                                cat_pending_ch_rx.store(0, Ordering::SeqCst);
-                                if freq_hz_to_amateur_channel(freq_rx.load(Ordering::SeqCst))
-                                    != Some(channel)
-                                    && let Some(hz) = channel_to_freq_hz(channel)
-                                {
-                                    freq_rx.store(hz, Ordering::SeqCst);
-                                }
-                            }
+    let serial_manager_fut = async move {
+        let mut active_cfg = ActiveRadioConfig {
+            phy_rate,
+            peer_mac,
+            tx_delay: None,
+            persistence: None,
+            slot_time: None,
+            tx_tail: None,
+            full_duplex: None,
+            target_baud: args.baud_rate,
+        };
 
-                            let pending_qdbm = cat_pending_qdbm_rx.load(Ordering::SeqCst);
-                            if pending_qdbm == 0 || pending_qdbm == tx_power_qdbm {
-                                cat_pending_qdbm_rx.store(0, Ordering::SeqCst);
-                                if attenuation_tenths_to_qdbm(att_rx.load(Ordering::SeqCst))
-                                    != tx_power_qdbm
-                                {
-                                    att_rx.store(
-                                        qdbm_to_attenuation_tenths(tx_power_qdbm),
-                                        Ordering::SeqCst,
-                                    );
-                                }
-                            }
-
-                            info!(
-                                "ESP32 status: ch={} ({:?} Hz), power={:.2} dBm, rate={:?}, rx={}, tx={}, rssi={} dBm",
-                                channel,
-                                channel_to_freq_hz(channel),
-                                f64::from(tx_power_qdbm) / 4.0,
-                                phy_rate,
-                                rx_count,
-                                tx_count,
-                                last_rssi
-                            );
-                        }
-                        Some(HardwareCommand::PeerMac(mac)) => {
-                            info!(
-                                "ESP32 TX peer MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-                            );
-                        }
-                        _ => {}
+        'reconnect: loop {
+            let serial =
+                match connect_and_configure_serial(&serial_port_path, active_cfg.target_baud).await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(
+                            "Serial connection to {} failed ({:#}); retrying in 1s...",
+                            serial_port_path, e
+                        );
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue 'reconnect;
                     }
-                    let _ = from_tnc_tx_clone.send(frame);
-                }
-                _ => {}
+                };
+
+            info!(
+                "Connected to ESP32 TNC on {} at {} baud",
+                serial_port_path, active_cfg.target_baud
+            );
+
+            let (serial_rx, serial_tx) = tokio::io::split(serial);
+            let mut reader = FramedRead::new(serial_rx, KissDecoder);
+            let mut writer = FramedWrite::new(serial_tx, KissEncoder);
+
+            if let Err(e) = push_active_config(
+                &mut writer,
+                applied_ch_rx.load(Ordering::SeqCst),
+                applied_qdbm_rx.load(Ordering::SeqCst),
+                &active_cfg,
+            )
+            .await
+            {
+                warn!(
+                    "Failed to push initial TNC configuration ({}); reconnecting...",
+                    e
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue 'reconnect;
             }
+
+            let mut seen_nonzero_counters = false;
+            let mut last_src_mac = [0u8; 6];
+            let mut missed_heartbeats: u8 = 0;
+            let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(3));
+            heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            loop {
+                tokio::select! {
+                    cmd_opt = to_tnc_rx.recv() => {
+                        let Some(frame) = cmd_opt else {
+                            anyhow::bail!("Internal TX command channel closed");
+                        };
+                        let mut baud_change_to = None;
+                        if !frame.is_empty() {
+                            match KissCommand::from_type_byte(frame[0]) {
+                                Some(KissCommand::DataFrame) => {
+                                    tx_activity_serial.store(true, Ordering::SeqCst);
+                                }
+                                Some(KissCommand::TxDelay) if frame.len() >= 2 => {
+                                    active_cfg.tx_delay = Some(frame[1]);
+                                }
+                                Some(KissCommand::Persistence) if frame.len() >= 2 => {
+                                    active_cfg.persistence = Some(frame[1]);
+                                }
+                                Some(KissCommand::SlotTime) if frame.len() >= 2 => {
+                                    active_cfg.slot_time = Some(frame[1]);
+                                }
+                                Some(KissCommand::TxTail) if frame.len() >= 2 => {
+                                    active_cfg.tx_tail = Some(frame[1]);
+                                }
+                                Some(KissCommand::FullDuplex) if frame.len() >= 2 => {
+                                    active_cfg.full_duplex = Some(frame[1]);
+                                }
+                                Some(KissCommand::SetHardware) => {
+                                    match HardwareCommand::decode(&frame[1..]) {
+                                        Some(HardwareCommand::SetChannel(ch)) => {
+                                            applied_ch_rx.store(ch, Ordering::SeqCst);
+                                        }
+                                        Some(HardwareCommand::SetFrequencyHz(hz)) => {
+                                            if let Some(ch) = freq_hz_to_amateur_channel(hz) {
+                                                applied_ch_rx.store(ch, Ordering::SeqCst);
+                                            }
+                                        }
+                                        Some(HardwareCommand::SetTxPowerQdbm(qdbm)) => {
+                                            applied_qdbm_rx.store(qdbm, Ordering::SeqCst);
+                                        }
+                                        Some(HardwareCommand::SetPhyRate(rate)) => {
+                                            active_cfg.phy_rate = rate;
+                                        }
+                                        Some(HardwareCommand::SetPeerMac(mac)) => {
+                                            active_cfg.peer_mac = mac;
+                                        }
+                                        Some(HardwareCommand::SetUartBaud(baud))
+                                            if is_valid_uart_baud(baud)
+                                                && baud != active_cfg.target_baud =>
+                                        {
+                                            active_cfg.target_baud = baud;
+                                            baud_change_to = Some(baud);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if let Err(e) = writer.send(frame).await {
+                            warn!("Serial write error ({}); reconnecting...", e);
+                            break;
+                        }
+                        if let Some(new_baud) = baud_change_to {
+                            info!("Switching host serial baud rate to {}...", new_baud);
+                            tokio::time::sleep(Duration::from_millis(60)).await;
+                            continue 'reconnect;
+                        }
+                    }
+                    res_opt = reader.next() => {
+                        match res_opt {
+                            Some(Ok(frame)) => {
+                                if frame.is_empty() {
+                                    continue;
+                                }
+                                missed_heartbeats = 0;
+                                match KissCommand::from_type_byte(frame[0]) {
+                                    Some(KissCommand::DataFrame) => {
+                                        let rssi = rssi_rx.load(Ordering::Relaxed);
+                                        info!(
+                                            "RX PDU ({} bytes, src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, last_rssi={} dBm)",
+                                            frame.len() - 1,
+                                            last_src_mac[0],
+                                            last_src_mac[1],
+                                            last_src_mac[2],
+                                            last_src_mac[3],
+                                            last_src_mac[4],
+                                            last_src_mac[5],
+                                            rssi
+                                        );
+                                        let _ = from_tnc_tx_clone.send(frame);
+                                    }
+                                    Some(KissCommand::SetHardware) => {
+                                        match HardwareCommand::decode(&frame[1..]) {
+                                            Some(HardwareCommand::Status {
+                                                channel,
+                                                tx_power_qdbm,
+                                                phy_rate: status_rate,
+                                                rx_count,
+                                                tx_count,
+                                                last_rssi,
+                                                last_src_mac: src_mac,
+                                            }) => {
+                                                if seen_nonzero_counters && rx_count == 0 && tx_count == 0 {
+                                                    warn!("Detected ESP32 reboot (counters reset to 0); re-applying radio configuration");
+                                                    seen_nonzero_counters = false;
+                                                    if active_cfg.target_baud != 115_200 {
+                                                        break;
+                                                    }
+                                                    if let Err(e) = push_active_config(
+                                                        &mut writer,
+                                                        applied_ch_rx.load(Ordering::SeqCst),
+                                                        applied_qdbm_rx.load(Ordering::SeqCst),
+                                                        &active_cfg,
+                                                    )
+                                                    .await
+                                                    {
+                                                        warn!("Failed to re-push config after ESP32 reboot ({}); reconnecting...", e);
+                                                        break;
+                                                    }
+                                                    continue;
+                                                }
+                                                if rx_count > 0 || tx_count > 0 {
+                                                    seen_nonzero_counters = true;
+                                                }
+
+                                                last_src_mac = src_mac;
+                                                rssi_rx.store(last_rssi, Ordering::Relaxed);
+                                                applied_ch_rx.store(channel, Ordering::SeqCst);
+                                                applied_qdbm_rx.store(tx_power_qdbm, Ordering::SeqCst);
+
+                                                let pending_ch = cat_pending_ch_rx.swap(0, Ordering::SeqCst);
+                                                if (pending_ch == 0 || pending_ch == channel)
+                                                    && freq_hz_to_amateur_channel(freq_rx.load(Ordering::SeqCst))
+                                                        != Some(channel)
+                                                    && let Some(hz) = channel_to_freq_hz(channel)
+                                                {
+                                                    freq_rx.store(hz, Ordering::SeqCst);
+                                                }
+
+                                                let pending_qdbm = cat_pending_qdbm_rx.swap(0, Ordering::SeqCst);
+                                                if (pending_qdbm == 0 || pending_qdbm == tx_power_qdbm)
+                                                    && attenuation_tenths_to_qdbm(att_rx.load(Ordering::SeqCst))
+                                                        != tx_power_qdbm
+                                                {
+                                                    att_rx.store(
+                                                        qdbm_to_attenuation_tenths(tx_power_qdbm),
+                                                        Ordering::SeqCst,
+                                                    );
+                                                }
+
+                                                info!(
+                                                    "ESP32 status: ch={} ({:?} Hz), power={:.2} dBm, rate={:?}, rx={}, tx={}, rssi={} dBm, last_src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                                                    channel,
+                                                    channel_to_freq_hz(channel),
+                                                    f64::from(tx_power_qdbm) / 4.0,
+                                                    status_rate,
+                                                    rx_count,
+                                                    tx_count,
+                                                    last_rssi,
+                                                    src_mac[0],
+                                                    src_mac[1],
+                                                    src_mac[2],
+                                                    src_mac[3],
+                                                    src_mac[4],
+                                                    src_mac[5]
+                                                );
+                                            }
+                                            Some(HardwareCommand::PeerMac(mac)) => {
+                                                info!(
+                                                    "ESP32 TX peer MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                                                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                        let _ = from_tnc_tx_clone.send(frame);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Some(Err(e)) => {
+                                warn!("Serial read error ({}); reconnecting...", e);
+                                break;
+                            }
+                            None => {
+                                warn!("Serial port {} closed; reconnecting...", serial_port_path);
+                                break;
+                            }
+                        }
+                    }
+                    _ = heartbeat_interval.tick() => {
+                        if active_cfg.target_baud != 115_200 {
+                            if missed_heartbeats >= 2 {
+                                warn!("ESP32 unresponsive at {} baud (possible reboot to 115200); reconnecting...", active_cfg.target_baud);
+                                break;
+                            }
+                            missed_heartbeats = missed_heartbeats.saturating_add(1);
+                            if let Some(frame) = encode_hw_kiss_frame(HardwareCommand::GetStatus)
+                                && writer.send(frame).await.is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        anyhow::Result::<()>::Err(anyhow::anyhow!("Serial RX stream ended (TNC disconnected)"))
+        #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
     };
 
     // CAT parameter watcher task: translates CAT frequency & attenuation updates into KISS SetHardware
@@ -395,18 +670,46 @@ async fn main() -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     };
 
+    let beacon_to_tnc = to_tnc_tx.clone();
+    let beacon_interval_secs = args.beacon_interval_secs;
+    let beacon_fut = async move {
+        let Some(cs) = callsign else {
+            return std::future::pending::<anyhow::Result<()>>().await;
+        };
+        let mut interval = tokio::time::interval(Duration::from_secs(beacon_interval_secs));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if tx_activity_since_beacon.swap(false, Ordering::SeqCst) {
+                let id_text = format!("DE {} ESP-PDU-TNC", cs);
+                let mut frame = Vec::with_capacity(1 + id_text.len());
+                frame.push(KissCommand::DataFrame as u8);
+                frame.extend_from_slice(id_text.as_bytes());
+                beacon_to_tnc
+                    .send(frame)
+                    .await
+                    .context("Beacon TX channel closed")?;
+                info!("Transmitted amateur radio callsign ID beacon: {}", id_text);
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    };
+
     let kiss_addr = format!("{}:{}", args.listen, args.kiss_port);
     let kiss_ws_addr = format!("{}:{}", args.listen, args.kiss_ws_port);
     let cat_addr = format!("{}:{}", args.listen, args.cat_port);
 
     let kiss_server = TncKissServer::new(to_tnc_tx.clone(), from_tnc_tx.clone());
     let kiss_ws_server = TncKissWsServer::new(to_tnc_tx, from_tnc_tx);
-    let cat_server = CatServer::new(freq_atomic).with_attenuation(att_atomic);
+    let cat_server = CatServer::new(freq_atomic)
+        .with_attenuation(att_atomic)
+        .with_rssi_dbm(last_rssi_atomic);
 
     if let Err(e) = tokio::try_join!(
-        serial_tx_fut,
-        serial_rx_fut,
+        serial_manager_fut,
         cat_watch_fut,
+        beacon_fut,
         kiss_server.run(&kiss_addr),
         kiss_ws_server.run(&kiss_ws_addr),
         cat_server.run(&cat_addr),

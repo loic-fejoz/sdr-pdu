@@ -1,5 +1,8 @@
 use bytes::BytesMut;
-use esp_pdu_protocol::{KissCommand, MAX_ESPNOW_PDU_LEN};
+use esp_pdu_protocol::{
+    HardwareCommand, KissCommand, MAX_ESPNOW_PDU_LEN, channel_to_freq_hz,
+    freq_hz_to_amateur_channel,
+};
 use futures::{SinkExt, StreamExt};
 use sdr_pdu_utils::kiss::{KissDecoder, KissEncoder};
 use tokio::net::TcpListener;
@@ -212,6 +215,30 @@ async fn forward_client_frame(frame: Vec<u8>, to_tnc: &mpsc::Sender<Vec<u8>>) ->
             );
             return true;
         }
+    } else if cmd == KissCommand::SetHardware {
+        match HardwareCommand::decode(&frame[1..]) {
+            Some(HardwareCommand::SetChannel(ch)) if channel_to_freq_hz(ch).is_none() => {
+                warn!("Dropping out-of-band KISS SetChannel({})", ch);
+                return true;
+            }
+            Some(HardwareCommand::SetFrequencyHz(hz))
+                if freq_hz_to_amateur_channel(hz).is_none() =>
+            {
+                warn!("Dropping out-of-band KISS SetFrequencyHz({})", hz);
+                return true;
+            }
+            Some(HardwareCommand::SetUartBaud(baud))
+                if !esp_pdu_protocol::is_valid_uart_baud(baud) =>
+            {
+                warn!("Dropping unsupported KISS SetUartBaud({})", baud);
+                return true;
+            }
+            None => {
+                warn!("Dropping malformed KISS SetHardware frame");
+                return true;
+            }
+            _ => {}
+        }
     }
 
     if let Err(e) = to_tnc.send(frame).await {
@@ -238,6 +265,7 @@ mod tests {
             vec![0x05, 1],                                        // FullDuplex
             vec![0x06, 0x01, 3],                                  // SetHardware: SetChannel
             vec![0x06, 0x05],                                     // SetHardware: GetStatus
+            vec![0x06, 0x08],                                     // SetHardware: GetPeerMac
             vec![0x06, 0x07, 0x48, 0x27, 0xE2, 0xE4, 0x74, 0x2C], // SetHardware: SetPeerMac
             vec![0xFF],                                           // Return
         ];
@@ -247,9 +275,12 @@ mod tests {
             assert_eq!(rx.recv().await.as_ref(), Some(frame));
         }
 
-        // Empty or oversized (>250B) DataFrames must be dropped without closing the channel
+        // Empty or oversized (>250B) DataFrames and malformed/out-of-band SetHardware frames must be dropped
         assert!(forward_client_frame(vec![0x00], &tx).await);
         assert!(forward_client_frame(vec![0x00; MAX_ESPNOW_PDU_LEN + 2], &tx).await);
+        assert!(forward_client_frame(vec![0x06], &tx).await);
+        assert!(forward_client_frame(vec![0x06, 0x01, 11], &tx).await);
+        assert!(forward_client_frame(vec![0x06, 0x09, 0x00, 0x00, 0x30, 0x39], &tx).await);
         assert!(rx.try_recv().is_err());
     }
 
