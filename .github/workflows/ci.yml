@@ -75,6 +75,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
     - name: Build host binaries (Linux / Windows)
       if: matrix.platform != 'macos-universal'
+      shell: bash
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       run: |
