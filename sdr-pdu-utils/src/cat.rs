@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI8, AtomicU64, Ordering};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio_util::codec::{FramedRead, LinesCodec};
@@ -9,6 +9,7 @@ use tracing::{error, info};
 pub struct CatServer {
     frequency: Arc<AtomicU64>,
     attenuation: Option<Arc<AtomicU64>>, // Attenuation stored as tenths of dB (e.g. 100 for 10.0 dB)
+    rssi_dbm: Option<Arc<AtomicI8>>,
 }
 
 impl CatServer {
@@ -16,11 +17,17 @@ impl CatServer {
         Self {
             frequency,
             attenuation: None,
+            rssi_dbm: None,
         }
     }
 
     pub fn with_attenuation(mut self, attenuation: Arc<AtomicU64>) -> Self {
         self.attenuation = Some(attenuation);
+        self
+    }
+
+    pub fn with_rssi_dbm(mut self, rssi_dbm: Arc<AtomicI8>) -> Self {
+        self.rssi_dbm = Some(rssi_dbm);
         self
     }
 
@@ -40,6 +47,7 @@ impl CatServer {
 
             let frequency = self.frequency.clone();
             let attenuation = self.attenuation.clone();
+            let rssi_dbm = self.rssi_dbm.clone();
 
             tokio::spawn(async move {
                 let (reader, mut writer) = tokio::io::split(socket);
@@ -95,7 +103,7 @@ impl CatServer {
                                 let _ = writer.write_all(b"RPRT 0\n").await;
                             }
                         }
-                        // rigctld get attenuation level: \get_level ATT or l ATT
+                        // rigctld get level: \get_level ATT|STRENGTH|RAWSTR or l ATT|STRENGTH|RAWSTR
                         "\\get_level" | "l" => {
                             if parts.len() > 1 && parts[1].eq_ignore_ascii_case("ATT") {
                                 if let Some(ref att_atomic) = attenuation {
@@ -103,6 +111,21 @@ impl CatServer {
                                     let val = tenths as f64 / 10.0;
                                     let _ =
                                         writer.write_all(format!("{:.1}\n", val).as_bytes()).await;
+                                } else {
+                                    let _ = writer.write_all(b"0\n").await;
+                                }
+                            } else if parts.len() > 1 && parts[1].eq_ignore_ascii_case("STRENGTH") {
+                                if let Some(ref rssi) = rssi_dbm {
+                                    let s9_db = i32::from(rssi.load(Ordering::SeqCst)) + 73;
+                                    let _ =
+                                        writer.write_all(format!("{}\n", s9_db).as_bytes()).await;
+                                } else {
+                                    let _ = writer.write_all(b"0\n").await;
+                                }
+                            } else if parts.len() > 1 && parts[1].eq_ignore_ascii_case("RAWSTR") {
+                                if let Some(ref rssi) = rssi_dbm {
+                                    let dbm = rssi.load(Ordering::SeqCst);
+                                    let _ = writer.write_all(format!("{}\n", dbm).as_bytes()).await;
                                 } else {
                                     let _ = writer.write_all(b"0\n").await;
                                 }
@@ -143,8 +166,11 @@ mod tests {
     async fn test_cat_server_network_commands() {
         let freq = Arc::new(AtomicU64::new(144000000));
         let att = Arc::new(AtomicU64::new(100)); // 10.0 dB
+        let rssi = Arc::new(AtomicI8::new(-53));
 
-        let cat_server = CatServer::new(freq.clone()).with_attenuation(att.clone());
+        let cat_server = CatServer::new(freq.clone())
+            .with_attenuation(att.clone())
+            .with_rssi_dbm(rssi);
         let addr = "127.0.0.1:24532";
 
         tokio::spawn(async move {
@@ -195,5 +221,16 @@ mod tests {
         writer.write_all(b"l ATT\n").await.unwrap();
         reader.read_line(&mut line).await.unwrap();
         assert_eq!(line.trim(), "20.0");
+        line.clear();
+
+        // 6. Signal strength (S9-normalized and raw dBm)
+        writer.write_all(b"l STRENGTH\n").await.unwrap();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim(), "20");
+        line.clear();
+
+        writer.write_all(b"l RAWSTR\n").await.unwrap();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim(), "-53");
     }
 }

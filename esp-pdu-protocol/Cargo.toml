@@ -1,0 +1,7 @@
+[package]
+name = "esp-pdu-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Shared no_std KISS and ESP-NOW hardware control protocol for esp-pdu-tnc"
+
+[dependencies]
