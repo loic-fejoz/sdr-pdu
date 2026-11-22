@@ -3,6 +3,7 @@ name: Rust CI/CD
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -13,7 +14,7 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v4
     - name: Install Nightly Rust
       uses: dtolnay/rust-toolchain@nightly
       with:
@@ -25,40 +26,46 @@ jobs:
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
     - name: Run fmt
-      run: cargo fmt --all --check
+      run: |
+        cargo fmt --all --check
+        cargo fmt --manifest-path esp-pdu-firmware/Cargo.toml --check
     - name: Run clippy
-    # Profiles for non-root packages are ignored, we allow this warning in CI for now
-    # as it's a workspace-level configuration issue.
+      # Profiles for non-root packages are ignored, we allow this warning in CI for now
+      # as it's a workspace-level configuration issue.
       run: cargo clippy --workspace --all-targets -- -D warnings
     - name: Run tests
       run: cargo test --workspace
     - name: Run GNU Radio verification in Docker
       run: make -C sdr-pdu-utils test-gnuradio
 
-  build-hackrf:
+  build-host:
     needs: lint-and-test
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            arch: amd64
+            platform: linux-amd64
             target: x86_64-unknown-linux-gnu
-            binary: hackrf-pdu-tx
+            ext: ""
           - os: ubuntu-latest
-            arch: arm64
+            platform: linux-arm64
             target: aarch64-unknown-linux-gnu
-            binary: hackrf-pdu-tx
+            ext: ""
           - os: windows-latest
-            arch: amd64
+            platform: windows-amd64
             target: x86_64-pc-windows-msvc
-            binary: hackrf-pdu-tx.exe
+            ext: ".exe"
+          - os: macos-latest
+            platform: macos-universal
+            target: universal-apple-darwin
+            ext: ""
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install Nightly Rust
       uses: dtolnay/rust-toolchain@nightly
       with:
-        targets: ${{ matrix.target }}
+        targets: ${{ matrix.platform == 'macos-universal' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
     - name: Install Cross-Compiler (Linux ARM64)
       if: matrix.target == 'aarch64-unknown-linux-gnu'
       run: |
@@ -66,15 +73,33 @@ jobs:
         sudo apt-get install -y gcc-aarch64-linux-gnu
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
-    - name: Build hackrf-pdu-tx
+    - name: Build host binaries (Linux / Windows)
+      if: matrix.platform != 'macos-universal'
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-      run: cargo build --release -p hackrf-pdu-tx --target ${{ matrix.target }}
-    - name: Upload Artifact
+      run: |
+        cargo build --release -p hackrf-pdu-tx -p esp-pdu-tnc -p pdu-proxy --target ${{ matrix.target }}
+        mkdir -p dist
+        for bin in hackrf-pdu-tx esp-pdu-tnc pdu-proxy; do
+          cp "target/${{ matrix.target }}/release/${bin}${{ matrix.ext }}" "dist/${bin}-${{ matrix.platform }}${{ matrix.ext }}"
+        done
+    - name: Build host binaries (macOS Universal)
+      if: matrix.platform == 'macos-universal'
+      run: |
+        cargo build --release -p hackrf-pdu-tx -p esp-pdu-tnc -p pdu-proxy --target x86_64-apple-darwin
+        cargo build --release -p hackrf-pdu-tx -p esp-pdu-tnc -p pdu-proxy --target aarch64-apple-darwin
+        mkdir -p dist
+        for bin in hackrf-pdu-tx esp-pdu-tnc pdu-proxy; do
+          lipo -create \
+            "target/x86_64-apple-darwin/release/${bin}" \
+            "target/aarch64-apple-darwin/release/${bin}" \
+            -output "dist/${bin}-macos-universal"
+        done
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: hackrf-pdu-tx-${{ matrix.arch }}-${{ matrix.os }}
-        path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+        name: host-${{ matrix.platform }}
+        path: dist/*
 
   build-pluto:
     needs: lint-and-test
@@ -110,8 +135,74 @@ jobs:
       run: |
         # We need to provide the sysroot path to the Makefile
         make release-pluto -C pluto-pdu-tx SYSROOT=${{ github.workspace }}/sysroot
+        mkdir -p dist
+        cp target/arm-unknown-linux-gnueabihf/release/pluto-pdu-tx dist/pluto-pdu-tx-linux-armhf
     - name: Upload Artifact (PlutoSDR ARM)
       uses: actions/upload-artifact@v4
       with:
-        name: pluto-pdu-tx-arm
-        path: target/arm-unknown-linux-gnueabihf/release/pluto-pdu-tx
+        name: pluto-pdu-tx-linux-armhf
+        path: dist/pluto-pdu-tx-linux-armhf
+
+  build-esp-firmware:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nightly Rust
+      uses: dtolnay/rust-toolchain@nightly
+    - name: Install espup and espflash
+      uses: taiki-e/install-action@v2
+      with:
+        tool: espup,espflash@3.3.0
+    - name: Cache Xtensa ESP toolchain
+      id: cache-esp
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains/esp
+          ~/export-esp.sh
+        key: esp-toolchain-1.82.0.3
+    - name: Install Xtensa ESP toolchain
+      if: steps.cache-esp.outputs.cache-hit != 'true'
+      run: espup install --targets esp32,esp32s3 --toolchain-version 1.82.0.3 --export-file ~/export-esp.sh
+    - name: Rust Cache (esp-pdu-firmware)
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: esp-pdu-firmware
+    - name: Build ESP32 and ESP32-S3 firmware
+      run: |
+        source ~/export-esp.sh
+        mkdir -p dist
+        cd esp-pdu-firmware
+        cargo +esp build --release --target xtensa-esp32-none-elf --features esp32 --no-default-features
+        cargo +esp build --release --target xtensa-esp32s3-none-elf --features esp32s3 --no-default-features
+        cp target/xtensa-esp32-none-elf/release/esp-pdu-firmware ../dist/esp-pdu-firmware-esp32.elf
+        cp target/xtensa-esp32s3-none-elf/release/esp-pdu-firmware ../dist/esp-pdu-firmware-esp32s3.elf
+        espflash save-image --chip esp32 --merge target/xtensa-esp32-none-elf/release/esp-pdu-firmware ../dist/esp-pdu-firmware-esp32.bin
+        espflash save-image --chip esp32s3 --merge target/xtensa-esp32s3-none-elf/release/esp-pdu-firmware ../dist/esp-pdu-firmware-esp32s3.bin
+    - name: Upload Firmware Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp-pdu-firmware
+        path: dist/*
+
+  release:
+    needs: [build-host, build-pluto, build-esp-firmware]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-assets
+        merge-multiple: true
+    - name: Generate SHA256SUMS.txt
+      working-directory: release-assets
+      run: sha256sum * > SHA256SUMS.txt
+    - name: Publish GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: release-assets/*
+        generate_release_notes: true
